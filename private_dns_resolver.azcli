@@ -235,10 +235,10 @@ az vm restart -g $rg -n $spoke1_vnet_name --force --no-wait
 
 # Allow DNS on Onprem GW
 echo -e "\e[1;36mAllowing DNS ports on onprem GW for the DNS resolution to work...\e[0m"
-az network nsg rule create -g $rg -n AllowICMPin --nsg-name $onprem1_vnet_name-gw-nsg --priority 1030 --access Allow --description AllowDNSTCP --protocol Tcp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 53 --source-address-prefixes '*' --source-port-ranges '*' -o none
-az network nsg rule create -g $rg -n AllowICMPin --nsg-name $onprem1_vnet_name-gw-nsg --priority 1030 --access Allow --description AllowDNSUDP --protocol Udp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 53 --source-address-prefixes '*' --source-port-ranges '*' -o none
+az network nsg rule create -g $rg -n AllowICMPin --nsg-name $onprem1_vnet_name-gw-nsg --priority 1000 --access Allow --description AllowDNSTCP --protocol Tcp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 53 --source-address-prefixes '*' --source-port-ranges '*' -o none
+az network nsg rule create -g $rg -n AllowICMPin --nsg-name $onprem1_vnet_name-gw-nsg --priority 1010 --access Allow --description AllowDNSUDP --protocol Udp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 53 --source-address-prefixes '*' --source-port-ranges '*' -o none
 az network nsg rule create -g $rg -n AllowSSHout --nsg-name $onprem1_vnet_name-gw-nsg --priority 1000 --access Allow --description AllowDNSTCP --protocol Tcp --direction Outbound --destination-address-prefixes '*' --destination-port-ranges 53 --source-address-prefixes '*' --source-port-ranges '*' -o none
-az network nsg rule create -g $rg -n AllowSSHout --nsg-name $onprem1_vnet_name-gw-nsg --priority 1000 --access Allow --description AllowDNSUDP --protocol Udp --direction Outbound --destination-address-prefixes '*' --destination-port-ranges 53 --source-address-prefixes '*' --source-port-ranges '*' -o none
+az network nsg rule create -g $rg -n AllowSSHout --nsg-name $onprem1_vnet_name-gw-nsg --priority 1010 --access Allow --description AllowDNSUDP --protocol Udp --direction Outbound --destination-address-prefixes '*' --destination-port-ranges 53 --source-address-prefixes '*' --source-port-ranges '*' -o none
 
 # Allow ICMP on Windows Firewall
 echo -e "\e[1;36mEnable ICMP and RDP on Windows VMs...\e[0m"
