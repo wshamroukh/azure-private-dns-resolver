@@ -150,6 +150,7 @@ az network nic create -g $rg  -n $onprem1_vnet_name-dc -l $location1 --vnet-name
 az vm create -g $rg -n $onprem1_vnet_name-dc -l $location1 --image Win2022Datacenter --nics $onprem1_vnet_name-dc --os-disk-name $onprem1_vnet_name-dc --size $win_vm_size --admin-username $admin_username --admin-password $admin_password -o none
 onprem1_dc_pubip=$(az network public-ip show -g $rg -n $onprem1_vnet_name-dc --query ipAddress -o tsv) && echo $onprem1_vnet_name-dc public ip: $onprem1_dc_pubip
 onprem1_dc_ip=$(az network nic show -g $rg -n $onprem1_vnet_name-dc --query ipConfigurations[0].privateIPAddress -o tsv) && echo $onprem1_vnet_name-dc private ip: $onprem1_dc_ip
+echo -e "\e[1;36mInstalling AD Domain Services on $onprem1_vnet_name-dc VM and configuring $domain_name domain...\e[0m"
 az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts "Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools"
 az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts @$dcscript_file
 
