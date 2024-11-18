@@ -1,4 +1,4 @@
-rg=dns-resolver-rg
+rg=dns-resolver
 location1=centralindia
 
 hub1_vnet_name=hub1
@@ -29,8 +29,8 @@ onprem1_gw_vti1=172.21.0.251
 onprem1_vm_subnet_name=vm
 onprem1_vm_subnet_address=172.21.1.0/24
 
-domain_name="wshamrookh.local"
-domain_netbios="WSHAMROOKH"
+domain_name="contoso.local"
+domain_netbios="CONTOSO"
 
 default_address1=0.0.0.0/1
 default_address2=128.0.0.0/1
