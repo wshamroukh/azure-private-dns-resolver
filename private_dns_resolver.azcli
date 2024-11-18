@@ -190,13 +190,17 @@ az network vnet subnet update -g $rg -n $onprem1_vm_subnet_name --vnet-name $onp
 echo -e "\e[1;36mCreating $onprem1_vnet_name-gw-nsg NSG...\e[0m"
 az network nsg create -g $rg -n $onprem1_vnet_name-gw-nsg -l $location1 -o none
 az network nsg rule create -g $rg -n AllowSSHin --nsg-name $onprem1_vnet_name-gw-nsg --priority 1000 --access Allow --description AllowSSH --protocol Tcp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 22 --source-address-prefixes '*' --source-port-ranges '*' -o none
-az network nsg rule create -g $rg -n AllowRDP --nsg-name $onprem1_vnet_name-gw-nsg --priority 1010 --access Allow --description AllowRDP --protocol Tcp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 3389 --source-address-prefixes '*' --source-port-ranges '*' -o none
+az network nsg rule create -g $rg -n AllowRDPin --nsg-name $onprem1_vnet_name-gw-nsg --priority 1010 --access Allow --description AllowRDP --protocol Tcp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 3389 --source-address-prefixes '*' --source-port-ranges '*' -o none
 az network nsg rule create -g $rg -n AllowIKE --nsg-name $onprem1_vnet_name-gw-nsg --priority 1020 --access Allow --description AllowIKE --protocol Udp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 4500 --source-address-prefixes '*' --source-port-ranges '*' -o none
 az network nsg rule create -g $rg -n AllowIPSec --nsg-name $onprem1_vnet_name-gw-nsg --priority 1030 --access Allow --description AllowIPSec --protocol Udp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 500 --source-address-prefixes '*' --source-port-ranges '*' -o none
 az network nsg rule create -g $rg -n AllowICMPin --nsg-name $onprem1_vnet_name-gw-nsg --priority 1040 --access Allow --description AllowICMP --protocol Icmp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges '*' --source-address-prefixes '*' --source-port-ranges '*' -o none
+az network nsg rule create -g $rg -n AllowDNSTCPin --nsg-name $onprem1_vnet_name-gw-nsg --priority 1050 --access Allow --description AllowDNSTCP --protocol Tcp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 53 --source-address-prefixes '*' --source-port-ranges '*' -o none
+az network nsg rule create -g $rg -n AllowDNSUDPin --nsg-name $onprem1_vnet_name-gw-nsg --priority 1060 --access Allow --description AllowDNSUDP --protocol Udp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 53 --source-address-prefixes '*' --source-port-ranges '*' -o none
 az network nsg rule create -g $rg -n AllowSSHout --nsg-name $onprem1_vnet_name-gw-nsg --priority 1000 --access Allow --description AllowSSH --protocol Tcp --direction Outbound --destination-address-prefixes '*' --destination-port-ranges 22 --source-address-prefixes '*' --source-port-ranges '*' -o none
-az network nsg rule create -g $rg -n AllowRDP --nsg-name $onprem1_vnet_name-gw-nsg --priority 1010 --access Allow --description AllowRDP --protocol Tcp --direction Outbound --destination-address-prefixes '*' --destination-port-ranges 3389 --source-address-prefixes '*' --source-port-ranges '*' -o none
+az network nsg rule create -g $rg -n AllowRDPout --nsg-name $onprem1_vnet_name-gw-nsg --priority 1010 --access Allow --description AllowRDP --protocol Tcp --direction Outbound --destination-address-prefixes '*' --destination-port-ranges 3389 --source-address-prefixes '*' --source-port-ranges '*' -o none
 az network nsg rule create -g $rg -n AllowICMPout --nsg-name $onprem1_vnet_name-gw-nsg --priority 1020 --access Allow --description AllowICMP --protocol Icmp --direction Outbound --destination-address-prefixes '*' --destination-port-ranges '*' --source-address-prefixes '*' --source-port-ranges '*' -o none
+az network nsg rule create -g $rg -n AllowDNSTCPout --nsg-name $onprem1_vnet_name-gw-nsg --priority 1030 --access Allow --description AllowDNSTCP --protocol Tcp --direction Outbound --destination-address-prefixes '*' --destination-port-ranges 53 --source-address-prefixes '*' --source-port-ranges '*' -o none
+az network nsg rule create -g $rg -n AllowDNSUDPout --nsg-name $onprem1_vnet_name-gw-nsg --priority 1040 --access Allow --description AllowDNSUDP --protocol Udp --direction Outbound --destination-address-prefixes '*' --destination-port-ranges 53 --source-address-prefixes '*' --source-port-ranges '*' -o none
 az network vnet subnet update -g $rg -n $onprem1_gw_subnet_name --vnet-name $onprem1_vnet_name --nsg $onprem1_vnet_name-gw-nsg -o none
 
 # spoke1 vm nsg
@@ -226,13 +230,6 @@ az dns-resolver forwarding-rule create -g $rg -n wshamrookh-rule --domain-name $
 # hub dns resolver link with outbound ruleset
 echo -e "\e[1;36mCreating a vnet link between $domain_name ruleset and $hub1_vnet_name VNet...\e[0m"
 az dns-resolver vnet-link create -g $rg -n $hub1_vnet_name-link --ruleset-name onprem-wshamrookh-ruleset --id $hub1_vnetid -o none
-
-# Allow DNS on Onprem GW
-echo -e "\e[1;36mAllowing DNS ports on onprem GW for the DNS resolution to work...\e[0m"
-az network nsg rule create -g $rg -n AllowDNSTCP --nsg-name $onprem1_vnet_name-gw-nsg --priority 1050 --access Allow --description AllowDNSTCP --protocol Tcp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 53 --source-address-prefixes '*' --source-port-ranges '*' -o none
-az network nsg rule create -g $rg -n AllowDNSUDP --nsg-name $onprem1_vnet_name-gw-nsg --priority 1060 --access Allow --description AllowDNSUDP --protocol Udp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 53 --source-address-prefixes '*' --source-port-ranges '*' -o none
-az network nsg rule create -g $rg -n AllowDNSTCP --nsg-name $onprem1_vnet_name-gw-nsg --priority 1030 --access Allow --description AllowDNSTCP --protocol Tcp --direction Outbound --destination-address-prefixes '*' --destination-port-ranges 53 --source-address-prefixes '*' --source-port-ranges '*' -o none
-az network nsg rule create -g $rg -n AllowDNSUDP --nsg-name $onprem1_vnet_name-gw-nsg --priority 1040 --access Allow --description AllowDNSUDP --protocol Udp --direction Outbound --destination-address-prefixes '*' --destination-port-ranges 53 --source-address-prefixes '*' --source-port-ranges '*' -o none
 
 # Allow ICMP on Windows Firewall
 echo -e "\e[1;36mEnable ICMP on Windows VMs...\e[0m"
