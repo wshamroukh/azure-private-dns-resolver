@@ -281,6 +281,7 @@ az network vnet peering create -g $rg -n $spoke1_vnet_name-to-$hub1_vnet_name-pe
 echo -e "\e[1;36mUpdate DNS Server to Azure Private DNS Resolver IP ($dns_resolver_ip)...\e[0m"
 az network vnet update -g $rg -n $spoke1_vnet_name --dns-servers $dns_resolver_ip -o none
 az network vnet update -g $rg -n $hub1_vnet_name --dns-servers $dns_resolver_ip -o none
+echo -e "\e[1;36mRestarting hub and spoke VMs after updating DNS settings in their VNets...\e[0m"
 az vm restart -g $rg -n $hub1_vnet_name --force --no-wait
 az vm restart -g $rg -n $spoke1_vnet_name --force --no-wait
 
