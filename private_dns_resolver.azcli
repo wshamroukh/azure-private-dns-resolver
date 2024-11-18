@@ -179,12 +179,6 @@ az network route-table route create --address-prefix $hub1_vnet_address -n to-$h
 az network route-table route create --address-prefix $spoke1_vnet_address -n to-$spoke1_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $onprem1_vnet_name --next-hop-ip-address $onprem1_gw_private_ip -o none
 az network vnet subnet update --vnet-name $onprem1_vnet_name -n $onprem1_vm_subnet_name --route-table $onprem1_vnet_name -g $rg -o none
 
-# hub1 vm nsg
-echo -e "\e[1;36mCreating $hub1_vnet_name-vm-nsg NSG...\e[0m"
-az network nsg create -g $rg -n $hub1_vnet_name-vm-nsg -l $location1 -o none
-az network nsg rule create -g $rg -n AllowRDP --nsg-name $hub1_vnet_name-vm-nsg --priority 1000 --access Allow --description AllowRDP --protocol Tcp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 3389 --source-address-prefixes '*' --source-port-ranges '*' -o none
-az network vnet subnet update -g $rg -n $hub1_vm_subnet_name --vnet-name $hub1_vnet_name --nsg $hub1_vnet_name-vm-nsg -o none
-
 # onprem1 vm nsg
 echo -e "\e[1;36mCreating $onprem1_vnet_name-vm-nsg NSG...\e[0m"
 az network nsg create -g $rg -n $onprem1_vnet_name-vm-nsg -l $location1 -o none
@@ -196,13 +190,13 @@ az network vnet subnet update -g $rg -n $onprem1_vm_subnet_name --vnet-name $onp
 echo -e "\e[1;36mCreating $onprem1_vnet_name-gw-nsg NSG...\e[0m"
 az network nsg create -g $rg -n $onprem1_vnet_name-gw-nsg -l $location1 -o none
 az network nsg rule create -g $rg -n AllowSSHin --nsg-name $onprem1_vnet_name-gw-nsg --priority 1000 --access Allow --description AllowSSH --protocol Tcp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 22 --source-address-prefixes '*' --source-port-ranges '*' -o none
-az network nsg rule create -g $rg -n AllowSSHin --nsg-name $onprem1_vnet_name-gw-nsg --priority 1000 --access Allow --description AllowRDP --protocol Tcp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 3389 --source-address-prefixes '*' --source-port-ranges '*' -o none
-az network nsg rule create -g $rg -n AllowIKE --nsg-name $onprem1_vnet_name-gw-nsg --priority 1010 --access Allow --description AllowIKE --protocol Udp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 4500 --source-address-prefixes '*' --source-port-ranges '*' -o none
-az network nsg rule create -g $rg -n AllowIPSec --nsg-name $onprem1_vnet_name-gw-nsg --priority 1020 --access Allow --description AllowIPSec --protocol Udp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 500 --source-address-prefixes '*' --source-port-ranges '*' -o none
-az network nsg rule create -g $rg -n AllowICMPin --nsg-name $onprem1_vnet_name-gw-nsg --priority 1030 --access Allow --description AllowICMP --protocol Icmp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges '*' --source-address-prefixes '*' --source-port-ranges '*' -o none
+az network nsg rule create -g $rg -n AllowSSHin --nsg-name $onprem1_vnet_name-gw-nsg --priority 1010 --access Allow --description AllowRDP --protocol Tcp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 3389 --source-address-prefixes '*' --source-port-ranges '*' -o none
+az network nsg rule create -g $rg -n AllowIKE --nsg-name $onprem1_vnet_name-gw-nsg --priority 1020 --access Allow --description AllowIKE --protocol Udp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 4500 --source-address-prefixes '*' --source-port-ranges '*' -o none
+az network nsg rule create -g $rg -n AllowIPSec --nsg-name $onprem1_vnet_name-gw-nsg --priority 1030 --access Allow --description AllowIPSec --protocol Udp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 500 --source-address-prefixes '*' --source-port-ranges '*' -o none
+az network nsg rule create -g $rg -n AllowICMPin --nsg-name $onprem1_vnet_name-gw-nsg --priority 1040 --access Allow --description AllowICMP --protocol Icmp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges '*' --source-address-prefixes '*' --source-port-ranges '*' -o none
 az network nsg rule create -g $rg -n AllowSSHout --nsg-name $onprem1_vnet_name-gw-nsg --priority 1000 --access Allow --description AllowSSH --protocol Tcp --direction Outbound --destination-address-prefixes '*' --destination-port-ranges 22 --source-address-prefixes '*' --source-port-ranges '*' -o none
-az network nsg rule create -g $rg -n AllowSSHout --nsg-name $onprem1_vnet_name-gw-nsg --priority 1000 --access Allow --description AllowRDP --protocol Tcp --direction Outbound --destination-address-prefixes '*' --destination-port-ranges 3389 --source-address-prefixes '*' --source-port-ranges '*' -o none
-az network nsg rule create -g $rg -n AllowICMPout --nsg-name $onprem1_vnet_name-gw-nsg --priority 1010 --access Allow --description AllowICMP --protocol Icmp --direction Outbound --destination-address-prefixes '*' --destination-port-ranges '*' --source-address-prefixes '*' --source-port-ranges '*' -o none
+az network nsg rule create -g $rg -n AllowSSHout --nsg-name $onprem1_vnet_name-gw-nsg --priority 1010 --access Allow --description AllowRDP --protocol Tcp --direction Outbound --destination-address-prefixes '*' --destination-port-ranges 3389 --source-address-prefixes '*' --source-port-ranges '*' -o none
+az network nsg rule create -g $rg -n AllowICMPout --nsg-name $onprem1_vnet_name-gw-nsg --priority 1020 --access Allow --description AllowICMP --protocol Icmp --direction Outbound --destination-address-prefixes '*' --destination-port-ranges '*' --source-address-prefixes '*' --source-port-ranges '*' -o none
 az network vnet subnet update -g $rg -n $onprem1_gw_subnet_name --vnet-name $onprem1_vnet_name --nsg $onprem1_vnet_name-gw-nsg -o none
 
 # spoke1 vm nsg
@@ -275,6 +269,12 @@ hub1_gw_pubip1=$(az network vnet-gateway show -n $hub1_vnet_name-gw -g $rg --que
 hub1_gw_bgp_ip0=$(az network vnet-gateway show -n $hub1_vnet_name-gw -g $rg --query 'bgpSettings.bgpPeeringAddresses[0].defaultBgpIpAddresses[0]' -o tsv) && echo $hub1_vnet_name-gw: $hub1_gw_bgp_ip0
 hub1_gw_bgp_ip1=$(az network vnet-gateway show -n $hub1_vnet_name-gw -g $rg --query 'bgpSettings.bgpPeeringAddresses[1].defaultBgpIpAddresses[0]' -o tsv) && echo $hub1_vnet_name-gw: $hub1_gw_bgp_ip1
 hub1_gw_asn=$(az network vnet-gateway show -n $hub1_vnet_name-gw -g $rg --query bgpSettings.asn -o tsv) && echo $hub1_vnet_name-gw: $hub1_gw_asn
+
+# hub1 vm nsg
+echo -e "\e[1;36mCreating $hub1_vnet_name-vm-nsg NSG...\e[0m"
+az network nsg create -g $rg -n $hub1_vnet_name-vm-nsg -l $location1 -o none
+az network nsg rule create -g $rg -n AllowRDP --nsg-name $hub1_vnet_name-vm-nsg --priority 1000 --access Allow --description AllowRDP --protocol Tcp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 3389 --source-address-prefixes '*' --source-port-ranges '*' -o none
+az network vnet subnet update -g $rg -n $hub1_vm_subnet_name --vnet-name $hub1_vnet_name --nsg $hub1_vnet_name-vm-nsg -o none
 
 # VNet Peering between hub1 and spoke1
 echo -e "\e[1;36mCreating VNet peerring between $hub1_vnet_name and $spoke1_vnet_name...\e[0m"
