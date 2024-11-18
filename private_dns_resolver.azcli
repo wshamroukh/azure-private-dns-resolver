@@ -114,7 +114,6 @@ hub1_vnetid=$(az network vnet show -g $rg -n $hub1_vnet_name --query id -o tsv)
 in_subnetid=$(az network vnet subnet show -g $rg -n $hub1_in_subnet --vnet-name $hub1_vnet_name --query id -o tsv)
 out_subnetid=$(az network vnet subnet show -g $rg -n $hub1_out_subnet --vnet-name $hub1_vnet_name --query id -o tsv)
 
-
 # hub1 VPN GW
 echo -e "\e[1;36mDeploying $hub1_vnet_name-gw VPN Gateway...\e[0m"
 az network public-ip create -g $rg -n $hub1_vnet_name-gw-pubip0 -l $location1 --allocation-method Static -o none
@@ -142,7 +141,7 @@ onprem1_gw_nic_default_gw=$(first_ip $onprem1_gw_subnet_address) && echo $onprem
 
 # onprem1 local network gateway
 echo -e "\e[1;36mDeploying $onprem1_vnet_name-gw local network gateway resource...\e[0m"
-az network local-gateway create -g $rg -n $onprem1_vnet_name-gw -l $location1 --gateway-ip-address $onprem1_gw_pubip --asn $onprem1_gw_asn --bgp-peering-address $onprem1_gw_private_ip --local-address-prefixes $onprem1_gw_private_ip/32 -o none
+az network local-gateway create -g $rg -n $onprem1_vnet_name-gw -l $location1 --gateway-ip-address $onprem1_gw_pubip --asn $onprem1_gw_asn --bgp-peering-address $onprem1_gw_private_ip --local-address-prefixes $onprem1_gw_private_ip/32 --no-wait -o none
 
 # onprem1 dc
 echo -e "\e[1;36mDeploying $onprem1_vnet_name-dc VM...\e[0m"
