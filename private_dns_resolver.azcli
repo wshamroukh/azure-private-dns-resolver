@@ -233,8 +233,8 @@ az dns-resolver vnet-link create -g $rg -n $hub1_vnet_name-link --ruleset-name o
 
 # Allow ICMP on Windows Firewall
 echo -e "\e[1;36mEnable ICMP on Windows VMs...\e[0m"
-az vm run-command invoke -g $rg -n $hub1_vnet_name --command-id RunPowerShellScript --scripts "New-NetFirewallRule -DisplayName "Allow ICMPv4-In" -Protocol ICMPv4 -IcmpType Any -Direction Inbound -Action Allow"
-az vm run-command invoke -g $rg -n $spoke1_vnet_name --command-id RunPowerShellScript --scripts "New-NetFirewallRule -DisplayName "Allow ICMPv4-In" -Protocol ICMPv4 -IcmpType Any -Direction Inbound -Action Allow"
+az vm run-command invoke -g $rg -n $hub1_vnet_name --command-id RunPowerShellScript --scripts "New-NetFirewallRule -DisplayName "File and Printer Sharing (Echo Request - ICMPv4-In)" -Protocol ICMPv4 -IcmpType Any -Direction Inbound -Action Allow"
+az vm run-command invoke -g $rg -n $spoke1_vnet_name --command-id RunPowerShellScript --scripts "New-NetFirewallRule -DisplayName "File and Printer Sharing (Echo Request - ICMPv4-In)" -Protocol ICMPv4 -IcmpType Any -Direction Inbound -Action Allow"
 
 # create storage account for testing
 stor_name=wadstor$RANDOM
@@ -267,6 +267,7 @@ hub1_gw_asn=$(az network vnet-gateway show -n $hub1_vnet_name-gw -g $rg --query 
 echo -e "\e[1;36mCreating $hub1_vnet_name-vm-nsg NSG...\e[0m"
 az network nsg create -g $rg -n $hub1_vnet_name-vm-nsg -l $location1 -o none
 az network nsg rule create -g $rg -n AllowRDP --nsg-name $hub1_vnet_name-vm-nsg --priority 1000 --access Allow --description AllowRDP --protocol Tcp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 3389 --source-address-prefixes '*' --source-port-ranges '*' -o none
+az network nsg rule create -g $rg -n AllowICMPin --nsg-name $hub1_vnet_name-vm-nsg --priority 1010 --access Allow --description AllowICMP --protocol Icmp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges '*' --source-address-prefixes '*' --source-port-ranges '*' -o none
 az network vnet subnet update -g $rg -n $hub1_vm_subnet_name --vnet-name $hub1_vnet_name --nsg $hub1_vnet_name-vm-nsg -o none
 
 # VNet Peering between hub1 and spoke1
