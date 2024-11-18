@@ -235,16 +235,16 @@ az network nsg rule create -g $rg -n AllowDNSTCP --nsg-name $onprem1_vnet_name-g
 az network nsg rule create -g $rg -n AllowDNSUDP --nsg-name $onprem1_vnet_name-gw-nsg --priority 1040 --access Allow --description AllowDNSUDP --protocol Udp --direction Outbound --destination-address-prefixes '*' --destination-port-ranges 53 --source-address-prefixes '*' --source-port-ranges '*' -o none
 
 # Allow ICMP on Windows Firewall
-echo -e "\e[1;36mEnable ICMP and RDP on Windows VMs...\e[0m"
+echo -e "\e[1;36mEnable ICMP on Windows VMs...\e[0m"
 az vm run-command invoke -g $rg -n $hub1_vnet_name --command-id RunPowerShellScript --scripts "New-NetFirewallRule -DisplayName "Allow ICMPv4-In" -Protocol ICMPv4 -IcmpType Any -Direction Inbound -Action Allow"
 az vm run-command invoke -g $rg -n $spoke1_vnet_name --command-id RunPowerShellScript --scripts "New-NetFirewallRule -DisplayName "Allow ICMPv4-In" -Protocol ICMPv4 -IcmpType Any -Direction Inbound -Action Allow"
 
 # create storage account for testing
 stor_name=wadstor$RANDOM
 echo -e "\e[1;36mCreating a storage account ($stor_name)...\e[0m"
-
 az storage account create -g $rg -n $stor_name --access-tier Hot --sku Standard_LRS -o none
 blobid=$(az storage account show -g $rg -n $stor_name --query id -o tsv)
+
 # Creating a private endpoint
 echo -e "\e[1;36mCreating a private endpoint for storage account($stor_name)...\e[0m"
 az network private-endpoint create -g $rg -n blobpe --connection-name connection --private-connection-resource-id $blobid --subnet $hub1_vm_subnet_name --group-id blob --vnet-name $hub1_vnet_name
