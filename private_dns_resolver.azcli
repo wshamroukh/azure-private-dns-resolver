@@ -231,11 +231,6 @@ az dns-resolver forwarding-rule create -g $rg -n wshamrookh-rule --domain-name $
 echo -e "\e[1;36mCreating a vnet link between $domain_name ruleset and $hub1_vnet_name VNet...\e[0m"
 az dns-resolver vnet-link create -g $rg -n $hub1_vnet_name-link --ruleset-name onprem-wshamrookh-ruleset --id $hub1_vnetid -o none
 
-# Allow ICMP on Windows Firewall
-echo -e "\e[1;36mEnable ICMP on Windows VMs...\e[0m"
-az vm run-command invoke -g $rg -n $hub1_vnet_name --command-id RunPowerShellScript --scripts "New-NetFirewallRule -DisplayName "File and Printer Sharing (Echo Request - ICMPv4-In)" -Protocol ICMPv4 -IcmpType Any -Direction Inbound -Action Allow"
-az vm run-command invoke -g $rg -n $spoke1_vnet_name --command-id RunPowerShellScript --scripts "New-NetFirewallRule -DisplayName "File and Printer Sharing (Echo Request - ICMPv4-In)" -Protocol ICMPv4 -IcmpType Any -Direction Inbound -Action Allow"
-
 # create storage account for testing
 stor_name=wadstor$RANDOM
 echo -e "\e[1;36mCreating a storage account ($stor_name)...\e[0m"
