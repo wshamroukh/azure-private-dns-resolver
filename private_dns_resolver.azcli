@@ -244,6 +244,7 @@ stor_name=wadstor$RANDOM
 echo -e "\e[1;36mCreating a storage account ($stor_name)...\e[0m"
 az storage account create -g $rg -n $stor_name --access-tier Hot --sku Standard_LRS -o none
 blobid=$(az storage account show -g $rg -n $stor_name --query id -o tsv)
+blobep=$(az storage account show -g $rg -n $stor_name --query primaryEndpoints.blob -o tsv)
 
 # Creating a private endpoint
 echo -e "\e[1;36mCreating a private endpoint for storage account($stor_name)...\e[0m"
