@@ -215,16 +215,16 @@ az dns-resolver inbound-endpoint create -g $rg -n inbound-endpoint --dns-resolve
 dns_resolver_ip=$(az dns-resolver inbound-endpoint show -g $rg -n inbound-endpoint --dns-resolver-name $dns_resolver_name --query ipConfigurations[0].privateIpAddress -o tsv)
 # outbound endpoint
 echo -e "\e[1;36mCreating an outbound endpoint for Azure Private DNS Resolver ($dns_resolver_name)...\e[0m"
-az dns-resolver outbound-endpoint create --dns-resolver-name $dns_resolver_name -g $rg -n outbound-endpoint --id $out_subnetid
+az dns-resolver outbound-endpoint create --dns-resolver-name $dns_resolver_name -g $rg -n outbound-endpoint --id $out_subnetid -o none
 outepid=$(az dns-resolver outbound-endpoint show -g $rg -n outbound-endpoint --dns-resolver-name $dns_resolver_name --query id -o tsv)
 # outbound ruleset to onprem
 echo -e "\e[1;36mCreating a rule set for $domain_name on Azure Private DNS Resolver ($dns_resolver_name)...\e[0m"
-az dns-resolver forwarding-ruleset create -g $rg -l $location1 --dns-forwarding-ruleset-name onprem-wshamrookh-ruleset --outbound-endpoints [{id:$outepid}]
+az dns-resolver forwarding-ruleset create -g $rg -l $location1 --dns-forwarding-ruleset-name onprem-wshamrookh-ruleset --outbound-endpoints [{id:$outepid}] -o none
 # oubound dns rule
 echo -e "\e[1;36mCreating an outbound rule for $domain_name on Azure Private DNS Resolver ($dns_resolver_name)...\e[0m"
-az dns-resolver forwarding-rule create -g $rg -n wshamrookh-rule --domain-name ${domain_name}. --forwarding-rule-state Enabled --ruleset-name onprem-wshamrookh-ruleset --target-dns-servers '[{ip-address:'$onprem1_dc_ip',port:'53'}]'
+az dns-resolver forwarding-rule create -g $rg -n wshamrookh-rule --domain-name ${domain_name}. --forwarding-rule-state Enabled --ruleset-name onprem-wshamrookh-ruleset --target-dns-servers '[{ip-address:'$onprem1_dc_ip',port:'53'}]' -o none
 # hub dns resolver link with outbound ruleset
-az dns-resolver vnet-link create -g $rg -n $hub1_vnet_name-link --ruleset-name onprem-wshamrookh-ruleset --id $hub1_vnetid
+az dns-resolver vnet-link create -g $rg -n $hub1_vnet_name-link --ruleset-name onprem-wshamrookh-ruleset --id $hub1_vnetid -o none
 
 # Allow DNS on Onprem GW
 echo -e "\e[1;36mAllowing DNS ports on onprem GW for the DNS resolution to work...\e[0m"
