@@ -211,7 +211,7 @@ echo -e "\e[1;36mCreating Azure Private DNS Resolver ($dns_resolver_name) in $hu
 az dns-resolver create -g $rg -n $dns_resolver_name -l $location1 --id $hub1_vnetid -o none
 # inbound endpoint
 echo -e "\e[1;36mCreating an inbound endpoint for Azure Private DNS Resolver ($dns_resolver_name)...\e[0m"
-az dns-resolver inbound-endpoint create -g $rg -n inbound-endpoint --dns-resolver-name $dns_resolver_name --ip-configurations '[{"private-ip-address":"","private-ip-allocation-method":"Dynamic","id":"'$in_subnetid'"}]'
+az dns-resolver inbound-endpoint create -g $rg -n inbound-endpoint --dns-resolver-name $dns_resolver_name --ip-configurations '[{"private-ip-address":"","private-ip-allocation-method":"Dynamic","id":"'$in_subnetid'"}]' -o none
 dns_resolver_ip=$(az dns-resolver inbound-endpoint show -g $rg -n inbound-endpoint --dns-resolver-name $dns_resolver_name --query ipConfigurations[0].privateIpAddress -o tsv)
 # outbound endpoint
 echo -e "\e[1;36mCreating an outbound endpoint for Azure Private DNS Resolver ($dns_resolver_name)...\e[0m"
