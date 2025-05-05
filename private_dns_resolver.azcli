@@ -67,7 +67,7 @@ function wait_until_finished {
      wait_interval=15
      resource_id=$1
      resource_name=$(echo $resource_id | cut -d/ -f 9)
-     echo -e "\e[1;37mWaiting for resource $resource_name to finish provisioning...\e[0m"
+     echo -e "\e[1;35mWaiting for resource $resource_name to finish provisioning...\e[0m"
      start_time=`date +%s`
      state=$(az resource show --id $resource_id --query properties.provisioningState -o tsv | tr -d '\r')
      until [[ "$state" == "Succeeded" ]] || [[ "$state" == "Failed" ]] || [[ -z "$state" ]]
@@ -82,7 +82,7 @@ function wait_until_finished {
         run_time=$(expr `date +%s` - $start_time)
         ((minutes=${run_time}/60))
         ((seconds=${run_time}%60))
-        echo -e "\e[1;35mResource $resource_name provisioning state is $state, wait time $minutes minutes and $seconds seconds\e[0m"
+        echo -e "\e[1;32mResource $resource_name provisioning state is $state, wait time $minutes minutes and $seconds seconds\e[0m"
      fi
 }
 
@@ -115,14 +115,16 @@ az network public-ip create -g $rg -n $hub1_vnet_name-gw-pubip0 -l $location1 --
 az network public-ip create -g $rg -n $hub1_vnet_name-gw-pubip1 -l $location1 --allocation-method Static -o none
 az network vnet-gateway create -g $rg -n $hub1_vnet_name-gw -l $location1 --public-ip-addresses $hub1_vnet_name-gw-pubip0 $hub1_vnet_name-gw-pubip1 --vnet $hub1_vnet_name --sku VpnGw1 --gateway-type Vpn --vpn-type RouteBased --asn $hub1_gw_asn --no-wait
 
-# spoke1 vnet
-echo -e "\e[1;36mCreating $spoke1_vnet_name VNet...\e[0m"
-az network vnet create -g $rg -n $spoke1_vnet_name -l $location1 --address-prefixes $spoke1_vnet_address --subnet-name $spoke1_vm_subnet_name --subnet-prefixes $spoke1_vm_subnet_address -o none
-
 # onprem1 vnet
 echo -e "\e[1;36mCreating $onprem1_vnet_name VNet...\e[0m"
 az network vnet create -g $rg -n $onprem1_vnet_name -l $location1 --address-prefixes $onprem1_vnet_address --subnet-name $onprem1_vm_subnet_name --subnet-prefixes $onprem1_vm_subnet_address -o none
 az network vnet subnet create -g $rg -n $onprem1_gw_subnet_name --address-prefixes $onprem1_gw_subnet_address --vnet-name $onprem1_vnet_name -o none
+
+# onprem1 dc
+echo -e "\e[1;36mDeploying $onprem1_vnet_name-dc VM...\e[0m"
+az network nic create -g $rg  -n $onprem1_vnet_name-dc -l $location1 --vnet-name $onprem1_vnet_name --subnet $onprem1_vm_subnet_name -o none
+az vm create -g $rg -n $onprem1_vnet_name-dc -l $location1 --image Win2022Datacenter --nics $onprem1_vnet_name-dc --os-disk-name $onprem1_vnet_name-dc --size $win_vm_size --admin-username $admin_username --admin-password $admin_password --no-wait -o none
+onprem1_dc_ip=$(az network nic show -g $rg -n $onprem1_vnet_name-dc --query ipConfigurations[0].privateIPAddress -o tsv | tr -d '\r') && echo $onprem1_vnet_name-dc private ip: $onprem1_dc_ip
 
 # onprem1 gw vm
 echo -e "\e[1;36mDeploying $onprem1_vnet_name-gw VM...\e[0m"
@@ -138,16 +140,9 @@ onprem1_gw_nic_default_gw=$(first_ip $onprem1_gw_subnet_address) && echo $onprem
 echo -e "\e[1;36mDeploying $onprem1_vnet_name-gw local network gateway resource...\e[0m"
 az network local-gateway create -g $rg -n $onprem1_vnet_name-gw -l $location1 --gateway-ip-address $onprem1_gw_pubip --asn $onprem1_gw_asn --bgp-peering-address $onprem1_gw_private_ip --local-address-prefixes $onprem1_gw_private_ip/32 --no-wait -o none
 
-# onprem1 dc
-echo -e "\e[1;36mDeploying $onprem1_vnet_name-dc VM...\e[0m"
-az network public-ip create -g $rg -n $onprem1_vnet_name-dc -l $location1 --allocation-method Static --sku Basic -o none
-az network nic create -g $rg  -n $onprem1_vnet_name-dc -l $location1 --vnet-name $onprem1_vnet_name --subnet $onprem1_vm_subnet_name --public-ip-address $onprem1_vnet_name-dc -o none
-az vm create -g $rg -n $onprem1_vnet_name-dc -l $location1 --image Win2022Datacenter --nics $onprem1_vnet_name-dc --os-disk-name $onprem1_vnet_name-dc --size $win_vm_size --admin-username $admin_username --admin-password $admin_password -o none
-onprem1_dc_pubip=$(az network public-ip show -g $rg -n $onprem1_vnet_name-dc --query ipAddress -o tsv | tr -d '\r') && echo $onprem1_vnet_name-dc public ip: $onprem1_dc_pubip
-onprem1_dc_ip=$(az network nic show -g $rg -n $onprem1_vnet_name-dc --query ipConfigurations[0].privateIPAddress -o tsv | tr -d '\r') && echo $onprem1_vnet_name-dc private ip: $onprem1_dc_ip
-echo -e "\e[1;36mInstalling AD Domain Services on $onprem1_vnet_name-dc VM and configuring $domain_name domain...\e[0m"
-az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts "Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools"
-az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts @$dcscript_file
+# spoke1 vnet
+echo -e "\e[1;36mCreating $spoke1_vnet_name VNet...\e[0m"
+az network vnet create -g $rg -n $spoke1_vnet_name -l $location1 --address-prefixes $spoke1_vnet_address --subnet-name $spoke1_vm_subnet_name --subnet-prefixes $spoke1_vm_subnet_address -o none
 
 # onprem1 vm
 echo -e "\e[1;36mDeploying $onprem1_vnet_name VM...\e[0m"
@@ -173,6 +168,11 @@ az network route-table create -n $onprem1_vnet_name -g $rg -l $location1 -o none
 az network route-table route create --address-prefix $hub1_vnet_address -n to-$hub1_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $onprem1_vnet_name --next-hop-ip-address $onprem1_gw_private_ip -o none
 az network route-table route create --address-prefix $spoke1_vnet_address -n to-$spoke1_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $onprem1_vnet_name --next-hop-ip-address $onprem1_gw_private_ip -o none
 az network vnet subnet update --vnet-name $onprem1_vnet_name -n $onprem1_vm_subnet_name --route-table $onprem1_vnet_name -g $rg -o none
+
+# Installing AD DS on onprem1 DC VM
+echo -e "\e[1;36mInstalling AD Domain Services on $onprem1_vnet_name-dc VM and configuring $domain_name domain...\e[0m"
+az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts "Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools"
+az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts @$dcscript_file
 
 # onprem1 vm nsg
 echo -e "\e[1;36mCreating $onprem1_vnet_name-vm-nsg NSG...\e[0m"
@@ -204,6 +204,18 @@ az network nsg create -g $rg -n $spoke1_vnet_name-vm-nsg -l $location1 -o none
 az network nsg rule create -g $rg -n AllowSSH --nsg-name $spoke1_vnet_name-vm-nsg --priority 1000 --access Allow --description AllowRDP --protocol Tcp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 3389 --source-address-prefixes '*' --source-port-ranges '*' -o none
 az network vnet subnet update -g $rg -n $spoke1_vm_subnet_name --vnet-name $spoke1_vnet_name --nsg $spoke1_vnet_name-vm-nsg -o none
 
+# waiting on hub1 vpn gw to finish deployment
+hub1_gw_id=$(az network vnet-gateway show -g $rg -n $hub1_vnet_name-gw --query id -o tsv | tr -d '\r')
+wait_until_finished $hub1_gw_id
+
+# Getting hub1 VPN GW details
+echo -e "\e[1;36mGetting $hub1_gw_name VPN Gateway details...\e[0m"
+hub1_gw_pubip0=$(az network vnet-gateway show -n $hub1_vnet_name-gw -g $rg --query 'bgpSettings.bgpPeeringAddresses[0].tunnelIpAddresses[0]' -o tsv | tr -d '\r') && echo $hub1_vnet_name-gw: $hub1_gw_pubip0
+hub1_gw_pubip1=$(az network vnet-gateway show -n $hub1_vnet_name-gw -g $rg --query 'bgpSettings.bgpPeeringAddresses[1].tunnelIpAddresses[0]' -o tsv | tr -d '\r') && echo $hub1_vnet_name-gw: $hub1_gw_pubip1
+hub1_gw_bgp_ip0=$(az network vnet-gateway show -n $hub1_vnet_name-gw -g $rg --query 'bgpSettings.bgpPeeringAddresses[0].defaultBgpIpAddresses[0]' -o tsv | tr -d '\r') && echo $hub1_vnet_name-gw: $hub1_gw_bgp_ip0
+hub1_gw_bgp_ip1=$(az network vnet-gateway show -n $hub1_vnet_name-gw -g $rg --query 'bgpSettings.bgpPeeringAddresses[1].defaultBgpIpAddresses[0]' -o tsv | tr -d '\r') && echo $hub1_vnet_name-gw: $hub1_gw_bgp_ip1
+hub1_gw_asn=$(az network vnet-gateway show -n $hub1_vnet_name-gw -g $rg --query bgpSettings.asn -o tsv | tr -d '\r') && echo $hub1_vnet_name-gw: $hub1_gw_asn
+
 # DNS Resolver
 dns_resolver_name=dnsresolver
 az extension add --name dns-resolver -o none
@@ -219,20 +231,20 @@ az dns-resolver outbound-endpoint create --dns-resolver-name $dns_resolver_name 
 outepid=$(az dns-resolver outbound-endpoint show -g $rg -n outbound-endpoint --dns-resolver-name $dns_resolver_name --query id -o tsv | tr -d '\r')
 # outbound ruleset to onprem
 echo -e "\e[1;36mCreating a rule set for $domain_name on Azure Private DNS Resolver ($dns_resolver_name)...\e[0m"
-az dns-resolver forwarding-ruleset create -g $rg -l $location1 --dns-forwarding-ruleset-name onprem-wshamrookh-ruleset --outbound-endpoints [{id:$outepid}] -o none
+az dns-resolver forwarding-ruleset create -g $rg -l $location1 --dns-forwarding-ruleset-name onprem-${domain_name}-ruleset --outbound-endpoints [{id:$outepid}] -o none
 # oubound dns rule
 echo -e "\e[1;36mCreating an outbound rule for $domain_name on Azure Private DNS Resolver ($dns_resolver_name)...\e[0m"
-az dns-resolver forwarding-rule create -g $rg -n wshamrookh-rule --domain-name ${domain_name}. --forwarding-rule-state Enabled --ruleset-name onprem-wshamrookh-ruleset --target-dns-servers '[{ip-address:'$onprem1_dc_ip',port:'53'}]' -o none
+az dns-resolver forwarding-rule create -g $rg -n ${domain_name}-rule --domain-name ${domain_name}. --forwarding-rule-state Enabled --ruleset-name onprem-${domain_name}-ruleset --target-dns-servers '[{ip-address:'$onprem1_dc_ip',port:'53'}]' -o none
 # hub dns resolver link with outbound ruleset
 echo -e "\e[1;36mCreating a vnet link between $domain_name ruleset and $hub1_vnet_name VNet...\e[0m"
-az dns-resolver vnet-link create -g $rg -n $hub1_vnet_name-link --ruleset-name onprem-wshamrookh-ruleset --id $hub1_vnetid -o none
+az dns-resolver vnet-link create -g $rg -n $hub1_vnet_name-link --ruleset-name onprem-${domain_name}-ruleset --id $hub1_vnetid -o none
 
-# create storage account for testing
+# create storage account
 stor_name=wadstor$RANDOM
 echo -e "\e[1;36mCreating a storage account ($stor_name)...\e[0m"
 az storage account create -g $rg -n $stor_name --access-tier Hot --sku Standard_LRS -o none
 blobid=$(az storage account show -g $rg -n $stor_name --query id -o tsv | tr -d '\r')
-blobep=$(az storage account show -g $rg -n $stor_name --query primaryEndpoints.blob -o tsv | tr -d '\r')
+blob_endpoint=$(az storage account show -g $rg -n $stor_name --query primaryEndpoints.blob -o tsv | tr -d '\r' |sed -e 's|^https://||' |sed -e 's|/$||') && echo $stor_name blob endpoint: $blob_endpoint
 
 # Creating a private endpoint
 echo -e "\e[1;36mCreating a private endpoint for storage account($stor_name)...\e[0m"
@@ -242,18 +254,6 @@ az network private-dns zone create -g $rg -n privatelink.blob.core.windows.net -
 az network private-dns link vnet create -g $rg -n $spoke1_vnet_name-dns-link --zone-name privatelink.blob.core.windows.net --virtual-network $spoke1_vnet_name --registration-enabled false -o none
 az network private-dns link vnet create -g $rg -n $hub1_vnet_name-dns-link --zone-name privatelink.blob.core.windows.net --virtual-network $hub1_vnet_name --registration-enabled false -o none
 az network private-endpoint dns-zone-group create -g $rg -n zone-group --endpoint-name blobpe --private-dns-zone privatelink.blob.core.windows.net --zone-name blob -o none
-
-# waiting on hub1 vpn gw to finish deployment
-hub1_gw_id=$(az network vnet-gateway show -g $rg -n $hub1_vnet_name-gw --query id -o tsv | tr -d '\r')
-wait_until_finished $hub1_gw_id
-
-# Getting hub1 VPN GW details
-echo -e "\e[1;36mGetting $hub1_gw_name VPN Gateway details...\e[0m"
-hub1_gw_pubip0=$(az network vnet-gateway show -n $hub1_vnet_name-gw -g $rg --query 'bgpSettings.bgpPeeringAddresses[0].tunnelIpAddresses[0]' -o tsv | tr -d '\r') && echo $hub1_vnet_name-gw: $hub1_gw_pubip0
-hub1_gw_pubip1=$(az network vnet-gateway show -n $hub1_vnet_name-gw -g $rg --query 'bgpSettings.bgpPeeringAddresses[1].tunnelIpAddresses[0]' -o tsv | tr -d '\r') && echo $hub1_vnet_name-gw: $hub1_gw_pubip1
-hub1_gw_bgp_ip0=$(az network vnet-gateway show -n $hub1_vnet_name-gw -g $rg --query 'bgpSettings.bgpPeeringAddresses[0].defaultBgpIpAddresses[0]' -o tsv | tr -d '\r') && echo $hub1_vnet_name-gw: $hub1_gw_bgp_ip0
-hub1_gw_bgp_ip1=$(az network vnet-gateway show -n $hub1_vnet_name-gw -g $rg --query 'bgpSettings.bgpPeeringAddresses[1].defaultBgpIpAddresses[0]' -o tsv | tr -d '\r') && echo $hub1_vnet_name-gw: $hub1_gw_bgp_ip1
-hub1_gw_asn=$(az network vnet-gateway show -n $hub1_vnet_name-gw -g $rg --query bgpSettings.asn -o tsv | tr -d '\r') && echo $hub1_vnet_name-gw: $hub1_gw_asn
 
 # hub1 vm nsg
 echo -e "\e[1;36mCreating $hub1_vnet_name-vm-nsg NSG...\e[0m"
@@ -269,8 +269,8 @@ az network vnet peering create -g $rg -n $spoke1_vnet_name-to-$hub1_vnet_name-pe
 
 # Update DNS Server on hub and Spoke to Azure Private DNS Resolver
 echo -e "\e[1;36mUpdate DNS Server on hub and Spoke VNet to Azure Private DNS Resolver IP ($dns_resolver_ip)...\e[0m"
-az network vnet update -g $rg -n $spoke1_vnet_name --dns-servers $dns_resolver_ip -o none
-az network vnet update -g $rg -n $hub1_vnet_name --dns-servers $dns_resolver_ip -o none
+az network vnet update -g $rg -n $spoke1_vnet_name --dns-servers $dns_resolver_ip "168.63.129.16" -o none
+az network vnet update -g $rg -n $hub1_vnet_name --dns-servers $dns_resolver_ip "168.63.129.16" -o none
 echo -e "\e[1;36mRestarting hub and spoke VMs after updating DNS settings in their VNets...\e[0m"
 az vm restart -g $rg -n $hub1_vnet_name --force --no-wait
 az vm restart -g $rg -n $spoke1_vnet_name --force --no-wait
@@ -286,10 +286,10 @@ EOF
 az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts @dns.ps1
 rm $pshell_file
 
-
 # Update DNS Server on onprem1 VNet to DC IP
 echo -e "\e[1;36mUpdate DNS Server on $onprem1_vnet_name VNet to DC IP ($onprem1_dc_ip)...\e[0m"
 az network vnet update -g $rg -n $onprem1_vnet_name --dns-servers $onprem1_dc_ip -o none
+echo -e "\e[1;36mRestarting onprem1 VMs after updating DNS settings in their VNet...\e[0m"
 az vm restart -g $rg -n $onprem1_vnet_name --force --no-wait
 az vm restart -g $rg -n $onprem1_vnet_name-gw --force --no-wait
 az vm restart -g $rg -n $onprem1_vnet_name-dc --force --no-wait
@@ -297,7 +297,6 @@ az vm restart -g $rg -n $onprem1_vnet_name-dc --force --no-wait
 # creating VPN connection between hub1 vpn gw and onprem1 gw
 echo -e "\e[1;36mCreating S2S VPN Connection between Azure VPN Gateway $hub1_vnet_name and $onprem1_vnet_name gateway...\e[0m"
 az network vpn-connection create -g $rg -n $hub1_vnet_name-gw-to-$onprem1_vnet_name-gw-s2s-connection -l $location1 --vnet-gateway1 $hub1_vnet_name-gw --local-gateway2 $onprem1_vnet_name-gw --shared-key $psk --enable-bgp -o none
-
 
 #######################
 # onprem1 VPN Config  #
@@ -470,30 +469,22 @@ ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_gw_pubip "sudo serv
 echo -e "\e[1;36mChecking the status of S2S VPN between $onprem1_vnet_name-gw and $hub1_vnet_name-gw VPN Gateways...\e[0m"
 ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_gw_pubip "sudo ipsec status"
 ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_gw_pubip "sudo ipsec statusall"
-
-# clean up config files
-rm $psk_file $ipsec_file $ipsec_vti_file $frr_conf_file $dcscript_file
-# clear up the cloudinit file
-rm $cloudinit_file
-
-#############
-# Diagnosis #
-#############
 echo -e "\e[1;36mChecking BGP routing on $onprem1_vnet_name-gw gateway vm...\e[0m"
-ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_gw_pubip "sudo ipsec status"
-ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_gw_pubip "sudo ipsec statusall"
 ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_gw_pubip "sudo vtysh -c 'show bgp summary'"
 ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_gw_pubip "sudo vtysh -c 'show ip bgp'"
 ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_gw_pubip "sudo vtysh -c 'show ip route'"
 ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_gw_pubip "sudo vtysh -c 'show ip route bgp'"
-echo -e "\e[1;36mChecking connectivity from $onprem1_vnet_name-gw gateway vm to the rest of network topology...\e[0m"
-ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_gw_pubip "ping $hub1_vm_ip -c 3"
-ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_gw_pubip "ping $spoke1_vm_ip -c 3"
 
+# clean up config files
+rm $psk_file $ipsec_file $ipsec_vti_file $frr_conf_file $dcscript_file $cloudinit_file
 
-echo -e "\e[1;36mNow on DC open cmd and run the command: (nslookup $stor_name.blob.core.windows.net) it should resolve to a private address...\e[0m"
+#############
+# Diagnosis #
+#############
 
-echo -e "\e[1;36mNow on DC RDP into Spoke VM($spoke1_vm_ip) and from inside Spoke VM, try the command: (nslookup onprem1-dc.$domain_name) and notice how it is resolving to the DC private IP address...\e[0m"
+# Checking DNS Resolution from onprem1 VM to blob endpoint (it happens through the onprem1-dns which forwards to the Azure Private DNS Resolver)
+echo -e "\e[1;36mChecking DNS Resolution from $onprem1_vnet_name VM to blob endpoint...\e[0m"
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_gw_pubip "ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_vm_ip "nslookup $blob_endpoint""
 
 #cleanup
 # az group delete -g $rg -y --no-wait
