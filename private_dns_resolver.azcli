@@ -211,6 +211,7 @@ az network vnet subnet update -g $rg -n $spoke1_vm_subnet_name --vnet-name $spok
 
 # DNS Resolver
 dns_resolver_name=dnsresolver
+az extension add --name dns-resolver -o none
 echo -e "\e[1;36mCreating Azure Private DNS Resolver ($dns_resolver_name) in $hub1_vnet_name VNet...\e[0m"
 az dns-resolver create -g $rg -n $dns_resolver_name -l $location1 --id $hub1_vnetid -o none
 # inbound endpoint
