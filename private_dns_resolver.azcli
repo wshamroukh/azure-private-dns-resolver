@@ -141,6 +141,7 @@ az network local-gateway create -g $rg -n $onprem1_vnet_name-gw -l $location1 --
 # spoke1 vnet
 echo -e "\e[1;36mCreating $spoke1_vnet_name VNet...\e[0m"
 az network vnet create -g $rg -n $spoke1_vnet_name -l $location1 --address-prefixes $spoke1_vnet_address --subnet-name $spoke1_vm_subnet_name --subnet-prefixes $spoke1_vm_subnet_address -o none
+spoke1_vnetid=$(az network vnet show -g $rg -n $spoke1_vnet_name --query id -o tsv | tr -d '\r')
 
 # onprem1 vm
 echo -e "\e[1;36mDeploying $onprem1_vnet_name VM...\e[0m"
@@ -229,13 +230,15 @@ az dns-resolver outbound-endpoint create --dns-resolver-name $dns_resolver_name 
 outepid=$(az dns-resolver outbound-endpoint show -g $rg -n outbound-endpoint --dns-resolver-name $dns_resolver_name --query id -o tsv | tr -d '\r')
 # outbound ruleset to onprem
 echo -e "\e[1;36mCreating a rule set for $domain_name on Azure Private DNS Resolver ($dns_resolver_name)...\e[0m"
-az dns-resolver forwarding-ruleset create -g $rg -l $location1 --dns-forwarding-ruleset-name onprem-${domain_name}-ruleset --outbound-endpoints [{id:$outepid}] -o none
+az dns-resolver forwarding-ruleset create -g $rg -l $location1 --dns-forwarding-ruleset-name onprem-${domain_netbios}-ruleset --outbound-endpoints [{id:$outepid}] -o none
 # oubound dns rule
 echo -e "\e[1;36mCreating an outbound rule for $domain_name on Azure Private DNS Resolver ($dns_resolver_name)...\e[0m"
-az dns-resolver forwarding-rule create -g $rg -n ${domain_name}-rule --domain-name ${domain_name}. --forwarding-rule-state Enabled --ruleset-name onprem-${domain_name}-ruleset --target-dns-servers '[{ip-address:'$onprem1_dc_ip',port:'53'}]' -o none
-# hub dns resolver link with outbound ruleset
+az dns-resolver forwarding-rule create -g $rg -n ${domain_netbios}-rule --domain-name ${domain_name}. --forwarding-rule-state Enabled --ruleset-name onprem-${domain_netbios}-ruleset --target-dns-servers '[{ip-address:'$onprem1_dc_ip',port:'53'}]' -o none
+# hub and spoke1 dns resolver link with outbound ruleset
 echo -e "\e[1;36mCreating a vnet link between $domain_name ruleset and $hub1_vnet_name VNet...\e[0m"
-az dns-resolver vnet-link create -g $rg -n $hub1_vnet_name-link --ruleset-name onprem-${domain_name}-ruleset --id $hub1_vnetid -o none
+az dns-resolver vnet-link create -g $rg -n $hub1_vnet_name-link --ruleset-name onprem-${domain_netbios}-ruleset --id $hub1_vnetid -o none
+echo -e "\e[1;36mCreating a vnet link between $domain_name ruleset and $spoke1_vnet_name VNet...\e[0m"
+az dns-resolver vnet-link create -g $rg -n $spoke1_vnet_name-link --ruleset-name onprem-${domain_netbios}-ruleset --id $spoke1_vnetid -o none
 
 # create storage account
 stor_name=wadstor$RANDOM
