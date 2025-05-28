@@ -382,11 +382,13 @@ case "$PLUTO_CONNECTION" in
     VTI_INTERFACE=vti0
     VTI_LOCALADDR=$onprem1_gw_vti0/32
     VTI_REMOTEADDR=$hub1_gw_bgp_ip0/32
+    echo "`date` - ${PLUTO_VERB} - ${PLUTO_CONNECTION} - $VTI_INTERFACE" >> /tmp/vtitrace.log
     ;;
   $hub1_vnet_name-gw1)
     VTI_INTERFACE=vti1
     VTI_LOCALADDR=$onprem1_gw_vti1/32
     VTI_REMOTEADDR=$hub1_gw_bgp_ip1/32
+    echo "`date` - ${PLUTO_VERB} - ${PLUTO_CONNECTION} - $VTI_INTERFACE" >> /tmp/vtitrace.log
     ;;
 esac
 case "${PLUTO_VERB}" in
