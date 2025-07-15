@@ -42,6 +42,9 @@ admin_password=Test#123#123
 myip=$(curl -s4 https://ifconfig.co/)
 psk=secret12345
 vm_size=Standard_B2ats_v2
+win_vm_size=Standard_B2als_v2
+domain_name=contoso.com
+domain_netbios=CONTOSO
 
 cloudinit_file=cloudinit.txt
 cat <<EOF > $cloudinit_file
@@ -225,8 +228,8 @@ rm $cloudinit_file
 
 # Installing AD DS on onprem1 DC VM
 echo -e "\e[1;36mInstalling AD Domain Services on $onprem1_vnet_name-dc VM and configuring $domain_name domain...\e[0m"
-az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts "Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools"
-az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts @$dcscript_file
+az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts "Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools" --query "value[0].message" -o tsv
+az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts @$dcscript_file --query "value[0].message" -o tsv
 
 # clean up the DC script file
 rm $dcscript_file
@@ -289,7 +292,7 @@ Install-WindowsFeature -Name DNS -IncludeManagementTools -IncludeAllSubFeature
 Add-DnsServerConditionalForwarderZone -Name "blob.core.windows.net" -MasterServers $dns_resolver_ip
 EOF
 # Run the script on DC VM
-az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts @dns.ps1
+az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts @dns.ps1 --query "value[0].message" -o tsv
 rm $pshell_file
 
 # Update DNS Server on onprem1 VNet to DC IP
@@ -461,7 +464,7 @@ conn %default
          # Authentication Method : Pre-Shared Key
          leftauth=psk
          rightauth=psk
-         ike=aes256-sha1-modp1024!
+         ike=aes256-sha256-modp2048
          ikelifetime=28800s
          # Phase 1 Negotiation Mode : main
          aggressive=no
