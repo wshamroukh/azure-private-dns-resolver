@@ -138,17 +138,9 @@ echo -e "\e[1;36mCreating $h1spoke_vnet_name VNet...\e[0m"
 az network vnet create -g $rg -n $h1spoke_vnet_name -l $location --address-prefixes $h1spoke_vnet_address --subnet-name $h1spoke_vm_subnet_name --subnet-prefixes $h1spoke_vm_subnet_address -o none
 h1spoke_vnetid=$(az network vnet show -g $rg -n $h1spoke_vnet_name --query id -o tsv | tr -d '\r')
 
-# h1spoke Bastion host
-echo -e "\e[1;36mCreating Bastion host for $h1spoke_vnet_name VNet...\e[0m"
-az network bastion create -g $rg -n $h1spoke_vnet_name-bastion --vnet-name $h1spoke_vnet_name --sku Developer -l $location --no-wait
-
 # o1spoke vnet
 echo -e "\e[1;36mCreating $o1spoke_vnet_name VNet...\e[0m"
 az network vnet create -g $rg -n $o1spoke_vnet_name -l $location --address-prefixes $o1spoke_vnet_address --subnet-name $o1spoke_vm_subnet_name --subnet-prefixes $o1spoke_vm_subnet_address -o none
-
-# o1spoke Bastion host
-echo -e "\e[1;36mCreating Bastion host for $o1spoke_vnet_name VNet...\e[0m"
-az network bastion create -g $rg -n $o1spoke_vnet_name-bastion --vnet-name $o1spoke_vnet_name --sku Developer -l $location --no-wait
 
 # hub1 spoke vnet peering
 echo -e "\e[1;36mCreating $h1spoke_vnet_name VNet peering...\e[0m"
