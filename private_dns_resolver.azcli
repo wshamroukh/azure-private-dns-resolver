@@ -322,7 +322,7 @@ conn %default
          ikelifetime=28800s
          # Phase 1 Negotiation Mode : main
          aggressive=no
-         esp=aes256-sha1!
+         esp=aes256-sha256
          lifetime=3600s
          keylife=3600s
          type=tunnel
