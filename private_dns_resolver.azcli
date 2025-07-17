@@ -171,8 +171,8 @@ az network vnet subnet update --vnet-name $onprem1_vnet_name -n $onprem1_vm_subn
 
 # Installing AD DS on onprem1 DC VM
 echo -e "\e[1;36mInstalling AD Domain Services on $onprem1_vnet_name-dc VM and configuring $domain_name domain...\e[0m"
-az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts "Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools"
-az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts @$dcscript_file
+az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts "Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools" --query "value[0].message" -o tsv
+az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts @$dcscript_file --query "value[0].message" -o tsv
 
 # onprem1 vm nsg
 echo -e "\e[1;36mCreating $onprem1_vnet_name-vm-nsg NSG...\e[0m"
@@ -285,7 +285,7 @@ Install-WindowsFeature -Name DNS -IncludeManagementTools -IncludeAllSubFeature
 Add-DnsServerConditionalForwarderZone -Name "blob.core.windows.net" -MasterServers $dns_resolver_ip
 EOF
 # Run the script on DC VM
-az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts @dns.ps1
+az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts @dns.ps1 --query "value[0].message" -o tsv
 rm $pshell_file
 
 # Update DNS Server on onprem1 VNet to DC IP
