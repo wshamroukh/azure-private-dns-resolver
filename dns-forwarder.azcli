@@ -480,7 +480,7 @@ blobid=$(az storage account show -g $rg -n $stor_name --query id -o tsv | tr -d 
 blob_endpoint=$(az storage account show -g $rg -n $stor_name --query primaryEndpoints.blob -o tsv | tr -d '\r' |sed -e 's|^https://||' |sed -e 's|/$||') && echo $stor_name blob endpoint: $blob_endpoint
 
 # Creating a private endpoint
-echo -e "\e[1;36mCreating a private endpoint for storage account($stor_name)...\e[0m"
+echo -e "\e[1;36mCreating a private endpoint for storage account($stor_name) in $spoke1_vnet_name...\e[0m"
 az network private-endpoint create -g $rg -n $stor_name-blobpe --connection-name connection --private-connection-resource-id $blobid --subnet $spoke1_vm_subnet_name --group-id blob --vnet-name $spoke1_vnet_name -o none
 echo -e "\e[1;36mCreating a private DNS zone for privatelink.blob.core.windows.net...\e[0m"
 az network private-dns zone create -g $rg -n privatelink.blob.core.windows.net -o none
@@ -491,8 +491,8 @@ az network private-dns link vnet create -g $rg -n $hub1_vnet_name-dns-link --zon
 echo -e "\e[1;36mCreate a DNS record for $stor_name in privatelink.blob.core.windows.net...\e[0m"
 az network private-endpoint dns-zone-group create -g $rg -n zone-group --endpoint-name $stor_name-blobpe --private-dns-zone privatelink.blob.core.windows.net --zone-name blob -o none
 
-# check the blob endpoint DNS resolution on onprem dc forwarder VM:
-echo -e "\e[1;36mChecking DNS resolution of $blob_endpoint before configuring DNS forwarding on $onprem1_vnet_name-dc VM...\e[0m"
+# check the blob endpoint DNS resolution on onprem dc VM:
+echo -e "\e[1;36mChecking DNS resolution of $blob_endpoint before configuring DNS conditional forwarding on $onprem1_vnet_name-dc VM...\e[0m"
 az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts "nslookup $blob_endpoint" --query "value[0].message" -o tsv
 
 # Install DNS on hub1 DNS forwarder VM
@@ -500,25 +500,23 @@ echo -e "\e[1;36mInstalling DNS Service on $hub1_vnet_name-fwd VM...\e[0m"
 az vm run-command invoke -g $rg -n $hub1_vnet_name-fwd --command-id RunPowerShellScript --scripts "Install-WindowsFeature -Name DNS -IncludeManagementTools -IncludeAllSubFeature" --query "value[0].message" -o tsv
 
 # enable DNS forwarding on hub1 DNS forwarder
-echo -e "\e[1;36mForwarding DNS queries on $hub1_vnet_name-fwd VM to Azure DNS Server IP address 168.63.129.16...\e[0m"
+echo -e "\e[1;36mEnabling DNS forwarding on $hub1_vnet_name-fwd VM to Azure DNS Server IP address 168.63.129.16...\e[0m"
 az vm run-command invoke -g $rg -n $hub1_vnet_name-fwd --command-id RunPowerShellScript --scripts "Set-DnsServerForwarder -IPAddress '168.63.129.16'" --query "value[0].message" -o tsv
-az vm run-command invoke -g $rg -n $hub1_vnet_name-fwd --command-id RunPowerShellScript --scripts "Get-NetFirewallRule -DisplayName 'File and Printer Sharing (Echo Request - ICMPv4-In)' | Enable-NetFirewallRule; Get-NetFirewallRule -DisplayName 'File and Printer Sharing (Echo Request - ICMPv6-In)'' | Enable-NetFirewallRule" --query "value[0].message" -o tsv
-
 
 # Enable Condtional Forwarding on onprem1 DNS server VM
-echo -e "\e[1;36mEnable Conditional DNS forwarding for blob.core.windows.net on $onprem1_vnet_name-dc to $hub1_fwd_private_ip - $hub1_vnet_name-fwd...\e[0m"
+echo -e "\e[1;36mEnable Conditional DNS forwarding for blob.core.windows.net on $onprem1_vnet_name-dc to $hub1_fwd_private_ip - $hub1_vnet_name-fwd VM...\e[0m"
 az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts "Add-DnsServerConditionalForwarderZone -Name "blob.core.windows.net" -MasterServers $hub1_fwd_private_ip" --query "value[0].message" -o tsv
 
 # check the blob endpoint DNS resolution on hub DNS forwarder VM:
-echo -e "\e[1;36mChecking DNS resolution of $blob_endpoint on $hub1_vnet_name-fwd VM...\e[0m"
+echo -e "\e[1;36mChecking DNS resolution of $blob_endpoint on $hub1_vnet_name-fwd VM after enabling DNS forwarding on $hub1_vnet_name-fwd VM...\e[0m"
 az vm run-command invoke -g $rg -n $hub1_vnet_name-fwd --command-id RunPowerShellScript --scripts "nslookup $blob_endpoint" --query "value[0].message" -o tsv
 
 # check the blob endpoint DNS resolution on onprem dc VM:
-echo -e "\e[1;36mChecking DNS resolution of $blob_endpoint on $onprem_vnet_name-dc after configuring DNS forwarding on $onprem1_vnet_name-dc VM...\e[0m"
+echo -e "\e[1;36mChecking DNS resolution of $blob_endpoint on $onprem_vnet_name-dc after configuring conditional DNS forwarding on $onprem1_vnet_name-dc VM to $hub1_vnet_name-fwd VM...\e[0m"
 az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts "nslookup $blob_endpoint" --query "value[0].message" -o tsv
 
 # check the blob endpoint DNS resolution spoke2 VM:
-echo -e "\e[1;36mChecking DNS resolution of $blob_endpoint on $spoke2_vnet_name VM...\e[0m"
+echo -e "\e[1;36mChecking DNS resolution of $blob_endpoint on $spoke2_vnet_name VM which has $hub_vnet_name-fwd as the DNS server...\e[0m"
 az vm run-command invoke -g $rg -n $spoke2_vnet_name --command-id RunPowerShellScript --scripts "nslookup $blob_endpoint" --query "value[0].message" -o tsv
 
 #cleanup
