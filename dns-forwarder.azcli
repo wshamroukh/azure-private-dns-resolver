@@ -84,7 +84,6 @@ az network vnet subnet create -g $rg -n $hub1_gw_subnet_name --address-prefixes 
 echo -e "\e[1;36mDeploying $hub1_vnet_name-fwd VM...\e[0m"
 az network nic create -g $rg -n $hub1_vnet_name-fwd -l $location --vnet-name $hub1_vnet_name --subnet $hub1_vm_subnet_name -o none
 az vm create -g $rg -n $hub1_vnet_name-fwd -l $location --image Win2022Datacenter --nics $hub1_vnet_name-fwd --os-disk-name $hub1_vnet_name-fwd --size Standard_B2ls_v2 --admin-username $admin_username --admin-password $admin_password --no-wait
-hub1_fwd_pubip=$(az network public-ip show -g $rg -n $hub1_vnet_name-fwd --query ipAddress -o tsv | tr -d '\r') && echo $hub1_vnet_name-fwd public ip: $hub1_fwd_pubip
 hub1_fwd_private_ip=$(az network nic show -g $rg -n $hub1_vnet_name-fwd --query ipConfigurations[0].privateIPAddress -o tsv | tr -d '\r') && echo $hub1_vnet_name-fwd vm private ip: $hub1_fwd_private_ip
 
 # onprem1 vnet
@@ -96,7 +95,6 @@ az network vnet subnet create -g $rg -n $onprem1_gw_subnet_name --address-prefix
 echo -e "\e[1;36mDeploying $onprem1_vnet_name-dc VM...\e[0m"
 az network nic create -g $rg -n $onprem1_vnet_name-dc -l $location --vnet-name $onprem1_vnet_name --subnet $onprem1_vm_subnet_name -o none
 az vm create -g $rg -n $onprem1_vnet_name-dc -l $location --image Win2022Datacenter --nics $onprem1_vnet_name-dc --os-disk-name $onprem1_vnet_name-dc --size Standard_B2ls_v2 --admin-username $admin_username --admin-password $admin_password --no-wait
-onprem1_dc_pubip=$(az network public-ip show -g $rg -n $onprem1_vnet_name-dc --query ipAddress -o tsv | tr -d '\r') && echo $onprem1_vnet_name-dc public ip: $onprem1_dc_pubip
 onprem1_dc_private_ip=$(az network nic show -g $rg -n $onprem1_vnet_name-dc --query ipConfigurations[0].privateIPAddress -o tsv | tr -d '\r') && echo $onprem1_vnet_name-dc vm private ip: $onprem1_dc_private_ip
 
 # hub1 gw vm
@@ -513,7 +511,7 @@ echo -e "\e[1;36mEnable Conditional DNS forwarding for blob.core.windows.net on 
 az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts "Add-DnsServerConditionalForwarderZone -Name "blob.core.windows.net" -MasterServers $hub1_fwd_private_ip" --query "value[0].message" -o tsv
 
 # check the blob endpoint DNS resolution on hub DNS forwarder VM:
-echo -e "\e[1;36mChecking DNS resolution of $blob_endpoint on $onprem1_vnet_name-dc VM...\e[0m"
+echo -e "\e[1;36mChecking DNS resolution of $blob_endpoint on $hub1_vnet_name-fwd VM...\e[0m"
 az vm run-command invoke -g $rg -n $hub1_vnet_name-fwd --command-id RunPowerShellScript --scripts "nslookup $blob_endpoint" --query "value[0].message" -o tsv
 
 # check the blob endpoint DNS resolution on onprem dc VM:
