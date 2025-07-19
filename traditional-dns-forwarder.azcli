@@ -127,7 +127,7 @@ az network vnet create -g $rg -n $spoke2_vnet_name -l $location --address-prefix
 
 # Update DNS on Spoke2 VNet
 echo -e "\e[1;36mUpdating $spoke2_vnet_name VNet DNS to the IP address of $hub1_vnet_name-fwd: $hub1_fwd_private_ip...\e[0m"
-az network vnet update -g $rg -n $spoke2_vnet_name --dns-servers $dns_resolver_ip "$hub1_fwd_private_ip" -o none
+az network vnet update -g $rg -n $spoke2_vnet_name --dns-servers $hub1_fwd_private_ip -o none
 
 # hub1 spoke1 vnet peering
 echo -e "\e[1;36mCreating a VNet peering between $spoke1_vnet_name and $hub1_vnet_name...\e[0m"
