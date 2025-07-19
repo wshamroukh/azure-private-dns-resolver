@@ -127,6 +127,10 @@ az network vnet create -g $rg -n $spoke1_vnet_name -l $location --address-prefix
 echo -e "\e[1;36mCreating $spoke2_vnet_name VNet...\e[0m"
 az network vnet create -g $rg -n $spoke2_vnet_name -l $location --address-prefixes $spoke2_vnet_address --subnet-name $spoke2_vm_subnet_name --subnet-prefixes $spoke2_vm_subnet_address -o none
 
+# Update DNS on Spoke2 VNet
+echo -e "\e[1;36mUpdating $spoke2_vnet_name VNet DNS to the IP address of $hub1_vnet_name-fwd: $hub1_fwd_private_ip...\e[0m"
+az network vnet update -g $rg -n $spoke2_vnet_name --dns-servers $dns_resolver_ip "$hub1_fwd_private_ip" -o none
+
 # hub1 spoke1 vnet peering
 echo -e "\e[1;36mCreating a VNet peering between $spoke1_vnet_name and $hub1_vnet_name...\e[0m"
 az network vnet peering create -g $rg --name $spoke1_vnet_name-to-$hub1_vnet_name --vnet-name $spoke1_vnet_name --remote-vnet $hub1_vnet_name --allow-vnet-access --allow-forwarded-traffic -o none
@@ -503,10 +507,6 @@ echo -e "\e[1;36mForwarding DNS queries on $hub1_vnet_name-fwd VM to Azure DNS S
 az vm run-command invoke -g $rg -n $hub1_vnet_name-fwd --command-id RunPowerShellScript --scripts "Set-DnsServerForwarder -IPAddress '168.63.129.16'" --query "value[0].message" -o tsv
 az vm run-command invoke -g $rg -n $hub1_vnet_name-fwd --command-id RunPowerShellScript --scripts "Get-NetFirewallRule -DisplayName 'File and Printer Sharing (Echo Request - ICMPv4-In)' | Enable-NetFirewallRule; Get-NetFirewallRule -DisplayName 'File and Printer Sharing (Echo Request - ICMPv6-In)'' | Enable-NetFirewallRule" --query "value[0].message" -o tsv
 
-# Update DNS on Spoke2 VNet
-az network vnet update -g $rg -n $spoke2_vnet_name --dns-servers $dns_resolver_ip "$hub1_fwd_private_ip" -o none
-echo -e "\e[1;36mRestarting spoke2 VM after updating DNS settings in VNet...\e[0m"
-az vm restart -g $rg -n $spoke2_vnet_name --force --no-wait
 
 # Enable Condtional Forwarding on onprem1 DNS server VM
 echo -e "\e[1;36mEnable Conditional DNS forwarding for blob.core.windows.net on $onprem1_vnet_name-dc to $hub1_fwd_private_ip - $hub1_vnet_name-fwd...\e[0m"
