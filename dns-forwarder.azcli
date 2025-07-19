@@ -16,6 +16,11 @@ spoke1_vnet_address=10.11.0.0/24
 spoke1_vm_subnet_name=vm
 spoke1_vm_subnet_address=10.11.0.0/24
 
+spoke2_vnet_name=spoke2
+spoke2_vnet_address=10.12.0.0/24
+spoke2_vm_subnet_name=vm
+spoke2_vm_subnet_address=10.12.0.0/24
+
 onprem1_vnet_name=onprem1
 onprem1_vnet_address=10.2.0.0/16
 onprem1_gw_subnet_name=gw
@@ -118,16 +123,26 @@ onprem1_gw_nic_default_gw=$(first_ip $onprem1_gw_subnet_address) && echo $onprem
 echo -e "\e[1;36mCreating $spoke1_vnet_name VNet...\e[0m"
 az network vnet create -g $rg -n $spoke1_vnet_name -l $location --address-prefixes $spoke1_vnet_address --subnet-name $spoke1_vm_subnet_name --subnet-prefixes $spoke1_vm_subnet_address -o none
 
-# hub1 spoke vnet peering
-echo -e "\e[1;36mCreating $spoke1_vnet_name VNet peering...\e[0m"
+# spoke2 vnet
+echo -e "\e[1;36mCreating $spoke2_vnet_name VNet...\e[0m"
+az network vnet create -g $rg -n $spoke2_vnet_name -l $location --address-prefixes $spoke2_vnet_address --subnet-name $spoke2_vm_subnet_name --subnet-prefixes $spoke2_vm_subnet_address -o none
+
+# hub1 spoke1 vnet peering
+echo -e "\e[1;36mCreating a VNet peering between $spoke1_vnet_name and $hub1_vnet_name...\e[0m"
 az network vnet peering create -g $rg --name $spoke1_vnet_name-to-$hub1_vnet_name --vnet-name $spoke1_vnet_name --remote-vnet $hub1_vnet_name --allow-vnet-access --allow-forwarded-traffic -o none
 az network vnet peering create -g $rg --name $hub1_vnet_name-to-$spoke1_vnet_name --vnet-name $hub1_vnet_name --remote-vnet $spoke1_vnet_name --allow-vnet-access --allow-forwarded-traffic -o none
+
+# hub1 spoke2 vnet peering
+echo -e "\e[1;36mCreating a VNet peering between $spoke2_vnet_name and $hub1_vnet_name...\e[0m"
+az network vnet peering create -g $rg --name $spoke2_vnet_name-to-$hub1_vnet_name --vnet-name $spoke2_vnet_name --remote-vnet $hub1_vnet_name --allow-vnet-access --allow-forwarded-traffic -o none
+az network vnet peering create -g $rg --name $hub1_vnet_name-to-$spoke2_vnet_name --vnet-name $hub1_vnet_name --remote-vnet $spoke2_vnet_name --allow-vnet-access --allow-forwarded-traffic -o none
 
 # hub1 route table
 echo -e "\e[1;36mDeploying $hub1_vnet_name route table and attaching it to $hub1_vm_subnet_name subnet...\e[0m"
 az network route-table create -n $hub1_vnet_name -g $rg -l $location -o none
 az network route-table route create --address-prefix $onprem1_vnet_address -n to-$onprem1_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $hub1_vnet_name --next-hop-ip-address $hub1_gw_private_ip -o none
 az network route-table route create --address-prefix $spoke1_vnet_address -n to-$spoke1_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $hub1_vnet_name --next-hop-ip-address $hub1_gw_private_ip -o none
+az network route-table route create --address-prefix $spoke2_vnet_address -n to-$spoke2_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $hub1_vnet_name --next-hop-ip-address $hub1_gw_private_ip -o none
 az network vnet subnet update --vnet-name $hub1_vnet_name -n $hub1_vm_subnet_name --route-table $hub1_vnet_name -g $rg -o none
 
 # spoke1 route table
@@ -135,14 +150,31 @@ echo -e "\e[1;36mDeploying $spoke1_vnet_name route table and attaching it to $sp
 az network route-table create -n $spoke1_vnet_name -g $rg -l $location -o none
 az network route-table route create --address-prefix $onprem1_vnet_address -n to-$onprem1_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $spoke1_vnet_name --next-hop-ip-address $hub1_gw_private_ip -o none
 az network route-table route create --address-prefix $hub1_vnet_address -n to-$hub1_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $spoke1_vnet_name --next-hop-ip-address $hub1_gw_private_ip -o none
+az network route-table route create --address-prefix $spoke2_vnet_address -n to-$spoke2_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $spoke1_vnet_name --next-hop-ip-address $hub1_gw_private_ip -o none
 az network vnet subnet update --vnet-name $spoke1_vnet_name -n $spoke1_vm_subnet_name --route-table $spoke1_vnet_name -g $rg -o none
+
+# spoke2 route table
+echo -e "\e[1;36mDeploying $spoke2_vnet_name route table and attaching it to $spoke2_vm_subnet_name subnet...\e[0m"
+az network route-table create -n $spoke2_vnet_name -g $rg -l $location -o none
+az network route-table route create --address-prefix $onprem1_vnet_address -n to-$onprem1_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $spoke2_vnet_name --next-hop-ip-address $hub1_gw_private_ip -o none
+az network route-table route create --address-prefix $hub1_vnet_address -n to-$hub1_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $spoke2_vnet_name --next-hop-ip-address $hub1_gw_private_ip -o none
+az network route-table route create --address-prefix $spoke1_vnet_address -n to-$spoke1_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $spoke2_vnet_name --next-hop-ip-address $hub1_gw_private_ip -o none
+az network vnet subnet update --vnet-name $spoke2_vnet_name -n $spoke2_vm_subnet_name --route-table $spoke2_vnet_name -g $rg -o none
 
 # onprem1 route table
 echo -e "\e[1;36mDeploying $onprem1_vnet_name route table and attaching it to $onprem1_vm_subnet_name subnet...\e[0m"
 az network route-table create -n $onprem1_vnet_name -g $rg -l $location -o none
 az network route-table route create --address-prefix $hub1_vnet_address -n to-$hub1_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $onprem1_vnet_name --next-hop-ip-address $onprem1_gw_private_ip -o none
 az network route-table route create --address-prefix $spoke1_vnet_address -n to-$spoke1_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $onprem1_vnet_name --next-hop-ip-address $onprem1_gw_private_ip -o none
+az network route-table route create --address-prefix $spoke2_vnet_address -n to-$spoke2_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $onprem1_vnet_name --next-hop-ip-address $onprem1_gw_private_ip -o none
 az network vnet subnet update --vnet-name $onprem1_vnet_name -n $onprem1_vm_subnet_name --route-table $onprem1_vnet_name -g $rg -o none
+
+# spoke2 vm
+echo -e "\e[1;36mDeploying $spoke2_vnet_name VM...\e[0m"
+az network nic create -g $rg -n $spoke2_vnet_name -l $location --vnet-name $spoke2_vnet_name --subnet $spoke2_vm_subnet_name -o none
+az vm create -g $rg -n $spoke2_vnet_name -l $location --image Win2022Datacenter --nics $spoke2_vnet_name --os-disk-name $spoke2_vnet_name --size Standard_B2ls_v2 --admin-username $admin_username --admin-password $admin_password --no-wait
+spoke2_vm_pubip=$(az network public-ip show -g $rg -n $spoke2_vnet_name --query ipAddress -o tsv | tr -d '\r') && echo $spoke2_vnet_name public ip: $spoke2_vm_pubip
+spoke2_vm_private_ip=$(az network nic show -g $rg -n $spoke2_vnet_name --query ipConfigurations[0].privateIPAddress -o tsv | tr -d '\r') && echo $spoke2_vnet_name vm private ip: $spoke2_vm_private_ip
 
 # Installing AD DS on onprem1 DC VM
 echo -e "\e[1;36mInstalling AD Domain Services on $onprem1_vnet_name-dc VM and configuring $domain_name domain...\e[0m"
@@ -469,6 +501,12 @@ az vm run-command invoke -g $rg -n $hub1_vnet_name-fwd --command-id RunPowerShel
 # enable DNS forwarding on hub1 DNS forwarder
 echo -e "\e[1;36mForwarding DNS queries on $hub1_vnet_name-fwd VM to Azure DNS Server IP address 168.63.129.16...\e[0m"
 az vm run-command invoke -g $rg -n $hub1_vnet_name-fwd --command-id RunPowerShellScript --scripts "Set-DnsServerForwarder -IPAddress '168.63.129.16'" --query "value[0].message" -o tsv
+az vm run-command invoke -g $rg -n $hub1_vnet_name-fwd --command-id RunPowerShellScript --scripts "Get-NetFirewallRule -DisplayName 'File and Printer Sharing (Echo Request - ICMPv4-In)' | Enable-NetFirewallRule; Get-NetFirewallRule -DisplayName 'File and Printer Sharing (Echo Request - ICMPv6-In)'' | Enable-NetFirewallRule" --query "value[0].message" -o tsv
+
+# Update DNS on Spoke2 VNet
+az network vnet update -g $rg -n $spoke2_vnet_name --dns-servers $dns_resolver_ip "$hub1_fwd_private_ip" -o none
+echo -e "\e[1;36mRestarting spoke2 VM after updating DNS settings in VNet...\e[0m"
+az vm restart -g $rg -n $spoke2_vnet_name --force --no-wait
 
 # Enable Condtional Forwarding on onprem1 DNS server VM
 echo -e "\e[1;36mEnable Conditional DNS forwarding for blob.core.windows.net on $onprem1_vnet_name-dc to $hub1_fwd_private_ip - $hub1_vnet_name-fwd...\e[0m"
@@ -478,9 +516,13 @@ az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerSh
 echo -e "\e[1;36mChecking DNS resolution of $blob_endpoint on $onprem1_vnet_name-dc VM...\e[0m"
 az vm run-command invoke -g $rg -n $hub1_vnet_name-fwd --command-id RunPowerShellScript --scripts "nslookup $blob_endpoint" --query "value[0].message" -o tsv
 
-# check the blob endpoint DNS resolution on onprem dc forwarder VM:
+# check the blob endpoint DNS resolution on onprem dc VM:
 echo -e "\e[1;36mChecking DNS resolution of $blob_endpoint on $onprem_vnet_name-dc after configuring DNS forwarding on $onprem1_vnet_name-dc VM...\e[0m"
 az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts "nslookup $blob_endpoint" --query "value[0].message" -o tsv
+
+# check the blob endpoint DNS resolution spoke2 VM:
+echo -e "\e[1;36mChecking DNS resolution of $blob_endpoint on $spoke2_vnet_name VM...\e[0m"
+az vm run-command invoke -g $rg -n $spoke2_vnet_name --command-id RunPowerShellScript --scripts "nslookup $blob_endpoint" --query "value[0].message" -o tsv
 
 #cleanup
 # az group delete -g $rg -y --no-wait
