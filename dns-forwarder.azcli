@@ -179,8 +179,9 @@ spoke2_vm_pubip=$(az network public-ip show -g $rg -n $spoke2_vnet_name --query 
 spoke2_vm_private_ip=$(az network nic show -g $rg -n $spoke2_vnet_name --query ipConfigurations[0].privateIPAddress -o tsv | tr -d '\r') && echo $spoke2_vnet_name vm private ip: $spoke2_vm_private_ip
 
 # Installing AD DS on onprem1 DC VM
-echo -e "\e[1;36mInstalling AD Domain Services on $onprem1_vnet_name-dc VM and configuring $domain_name domain...\e[0m"
+echo -e "\e[1;36mInstalling AD Domain Services feature on $onprem1_vnet_name-dc VM...\e[0m"
 az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts "Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools" --query "value[0].message" -o tsv
+echo -e "\e[1;36mConfiguring $domain_name domain on $onprem1_vnet_name-dc VM...\e[0m"
 az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts @$dcscript_file --query "value[0].message" -o tsv
 
 # clear up the cloudinit file
