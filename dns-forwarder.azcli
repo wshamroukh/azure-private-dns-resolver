@@ -1,0 +1,632 @@
+rg=secondary-dns-in-hub
+location=centralindia
+
+hub1_vnet_name=hub1
+hub1_vnet_address=10.1.0.0/16
+hub1_gw_subnet_name=gw
+hub1_gw_subnet_address=10.1.0.0/24
+hub1_gw_asn=65501
+hub1_gw_vti0=10.1.0.250
+hub1_vm_subnet_name=vm
+hub1_vm_subnet_address=10.1.1.0/24
+
+spoke1_vnet_name=spoke1
+spoke1_vnet_address=10.11.0.0/24
+spoke1_vm_subnet_name=vm
+spoke1_vm_subnet_address=10.11.0.0/24
+
+spoke2_vnet_name=spoke2
+spoke2_vnet_address=10.12.0.0/24
+spoke2_vm_subnet_name=vm
+spoke2_vm_subnet_address=10.12.0.0/24
+
+onprem1_vnet_name=onprem1
+onprem1_vnet_address=10.2.0.0/16
+onprem1_gw_subnet_name=gw
+onprem1_gw_subnet_address=10.2.0.0/24
+onprem1_gw_asn=65502
+onprem1_gw_vti0=10.2.0.250
+onprem1_vm_subnet_name=vm
+onprem1_vm_subnet_address=10.2.1.0/24
+
+domain_name="contoso.local"
+domain_netbios="CONTOSO"
+
+admin_username=$(whoami)
+admin_password=Test#123#123
+myip=$(curl -s4 https://ifconfig.co/)
+psk=secret12345
+vm_size=Standard_B2ats_v2
+
+cloudinit_file=cloudinit.txt
+cat <<EOF > $cloudinit_file
+#cloud-config
+runcmd:
+  - curl -s https://deb.frrouting.org/frr/keys.gpg | sudo tee /usr/share/keyrings/frrouting.gpg > /dev/null
+  - echo deb [signed-by=/usr/share/keyrings/frrouting.gpg] https://deb.frrouting.org/frr \$(lsb_release -s -c) frr-stable | sudo tee -a /etc/apt/sources.list.d/frr.list
+  - sudo apt update && sudo apt install -y frr frr-pythontools
+  - sudo apt install -y strongswan inetutils-traceroute net-tools
+  - sudo sed -i "/bgpd=no/ s//bgpd=yes/" /etc/frr/daemons
+  - sudo service frr restart
+  - sudo systemctl enable ipsec
+  - cp /etc/ipsec.conf /etc/ipsec.conf.bak
+  - cp /etc/ipsec.secrets /etc/ipsec.secrets.bak
+  - echo "net.ipv4.conf.all.forwarding=1" | sudo tee -a /etc/sysctl.conf
+  - echo "net.ipv4.conf.default.forwarding=1" | sudo tee -a /etc/sysctl.conf
+  - sudo sysctl -p
+EOF
+
+function first_ip(){
+    subnet=$1
+    IP=$(echo $subnet | cut -d/ -f 1)
+    IP_HEX=$(printf '%.2X%.2X%.2X%.2X\n' `echo $IP | sed -e 's/\./ /g'`)
+    NEXT_IP_HEX=$(printf %.8X `echo $(( 0x$IP_HEX + 1 ))`)
+    NEXT_IP=$(printf '%d.%d.%d.%d\n' `echo $NEXT_IP_HEX | sed -r 's/(..)/0x\1 /g'`)
+    echo "$NEXT_IP"
+}
+
+# Resource Groups
+echo -e "\e[1;36mCreating $rg Resource Group...\e[0m"
+az group create -l $location -n $rg -o none
+
+# hub1 vnet
+echo -e "\e[1;36mCreating $hub1_vnet_name VNet...\e[0m"
+az network vnet create -g $rg -n $hub1_vnet_name -l $location --address-prefixes $hub1_vnet_address --subnet-name $hub1_vm_subnet_name --subnet-prefixes $hub1_vm_subnet_address -o none
+az network vnet subnet create -g $rg -n $hub1_gw_subnet_name --address-prefixes $hub1_gw_subnet_address --vnet-name $hub1_vnet_name -o none
+
+# hub1 dns forwarder vm
+echo -e "\e[1;36mDeploying $hub1_vnet_name-dns VM...\e[0m"
+az network public-ip create -g $rg -n $hub1_vnet_name-dns -l $location --allocation-method Static --sku Basic -o none
+az network nic create -g $rg -n $hub1_vnet_name-dns -l $location --vnet-name $hub1_vnet_name --subnet $hub1_vm_subnet_name --public-ip-address $hub1_vnet_name-dns -o none
+az vm create -g $rg -n $hub1_vnet_name-dns -l $location --image Win2022Datacenter --nics $hub1_vnet_name-dns --os-disk-name $hub1_vnet_name-dns --size Standard_B2ls_v2 --admin-username $admin_username --admin-password $admin_password --no-wait
+hub1_dns_private_ip=$(az network nic show -g $rg -n $hub1_vnet_name-dns --query ipConfigurations[0].privateIPAddress -o tsv | tr -d '\r') && echo $hub1_vnet_name-dns vm private ip: $hub1_dns_private_ip
+
+# onprem1 vnet
+echo -e "\e[1;36mCreating $onprem1_vnet_name VNet...\e[0m"
+az network vnet create -g $rg -n $onprem1_vnet_name -l $location --address-prefixes $onprem1_vnet_address --subnet-name $onprem1_vm_subnet_name --subnet-prefixes $onprem1_vm_subnet_address -o none
+az network vnet subnet create -g $rg -n $onprem1_gw_subnet_name --address-prefixes $onprem1_gw_subnet_address --vnet-name $onprem1_vnet_name -o none
+
+# onprem1-dc vm
+echo -e "\e[1;36mDeploying $onprem1_vnet_name-dc VM...\e[0m"
+az network public-ip create -g $rg -n $onprem1_vnet_name-dc -l $location --allocation-method Static --sku Basic -o none
+az network nic create -g $rg -n $onprem1_vnet_name-dc -l $location --vnet-name $onprem1_vnet_name --subnet $onprem1_vm_subnet_name --public-ip-address $onprem1_vnet_name-dc -o none
+az vm create -g $rg -n $onprem1_vnet_name-dc -l $location --image Win2022Datacenter --nics $onprem1_vnet_name-dc --os-disk-name $onprem1_vnet_name-dc --size Standard_B2ls_v2 --admin-username $admin_username --admin-password $admin_password --no-wait
+onprem1_dc_private_ip=$(az network nic show -g $rg -n $onprem1_vnet_name-dc --query ipConfigurations[0].privateIPAddress -o tsv | tr -d '\r') && echo $onprem1_vnet_name-dc vm private ip: $onprem1_dc_private_ip
+
+# hub1 gw vm
+echo -e "\e[1;36mDeploying $hub1_vnet_name-gw VM...\e[0m"
+az network public-ip create -g $rg -n $hub1_vnet_name-gw -l $location --allocation-method Static --sku Basic -o none
+az network nic create -g $rg -n $hub1_vnet_name-gw -l $location --vnet-name $hub1_vnet_name --subnet $hub1_gw_subnet_name --ip-forwarding true --public-ip-address $hub1_vnet_name-gw -o none
+az vm create -g $rg -n $hub1_vnet_name-gw -l $location --image Ubuntu2404 --nics $hub1_vnet_name-gw --os-disk-name $hub1_vnet_name-gw --size $vm_size --admin-username $admin_username --generate-ssh-keys --custom-data $cloudinit_file --no-wait
+# hub1 gw details
+hub1_gw_pubip=$(az network public-ip show -g $rg -n $hub1_vnet_name-gw --query ipAddress -o tsv | tr -d '\r') && echo $hub1_vnet_name-gw public ip: $hub1_gw_pubip
+hub1_gw_private_ip=$(az network nic show -g $rg -n $hub1_vnet_name-gw --query ipConfigurations[].privateIPAddress -o tsv | tr -d '\r')  && echo $hub1_vnet_name-gw private ip: $hub1_gw_private_ip
+hub1_gw_nic_default_gw=$(first_ip $hub1_gw_subnet_address) && echo $hub1_vnet_name-gw default gateway ip: $hub1_gw_nic_default_gw
+
+# onprem1 gw vm
+echo -e "\e[1;36mDeploying $onprem1_vnet_name-gw VM...\e[0m"
+az network public-ip create -g $rg -n $onprem1_vnet_name-gw -l $location --allocation-method Static --sku Basic -o none
+az network nic create -g $rg -n $onprem1_vnet_name-gw -l $location --vnet-name $onprem1_vnet_name --subnet $onprem1_gw_subnet_name --ip-forwarding true --public-ip-address $onprem1_vnet_name-gw -o none
+az vm create -g $rg -n $onprem1_vnet_name-gw -l $location --image Ubuntu2404 --nics $onprem1_vnet_name-gw --os-disk-name $onprem1_vnet_name-gw --size $vm_size --admin-username $admin_username --generate-ssh-keys --custom-data $cloudinit_file --no-wait
+# onprem1 gw details
+onprem1_gw_pubip=$(az network public-ip show -g $rg -n $onprem1_vnet_name-gw --query ipAddress -o tsv | tr -d '\r') && echo $onprem1_vnet_name-gw public ip: $onprem1_gw_pubip
+onprem1_gw_private_ip=$(az network nic show -g $rg -n $onprem1_vnet_name-gw --query ipConfigurations[].privateIPAddress -o tsv | tr -d '\r')  && echo $onprem1_vnet_name-gw private ip: $onprem1_gw_private_ip
+onprem1_gw_nic_default_gw=$(first_ip $onprem1_gw_subnet_address) && echo $onprem1_vnet_name-gw default gateway ip: $onprem1_gw_nic_default_gw
+
+# spoke1 vnet
+echo -e "\e[1;36mCreating $spoke1_vnet_name VNet...\e[0m"
+az network vnet create -g $rg -n $spoke1_vnet_name -l $location --address-prefixes $spoke1_vnet_address --subnet-name $spoke1_vm_subnet_name --subnet-prefixes $spoke1_vm_subnet_address -o none
+
+# spoke2 vnet
+echo -e "\e[1;36mCreating $spoke2_vnet_name VNet...\e[0m"
+az network vnet create -g $rg -n $spoke2_vnet_name -l $location --address-prefixes $spoke2_vnet_address --subnet-name $spoke2_vm_subnet_name --subnet-prefixes $spoke2_vm_subnet_address -o none
+
+# Installing AD DS on onprem1 DC VM
+echo -e "\e[1;36mInstalling AD Domain Services feature on $onprem1_vnet_name-dc VM...\e[0m"
+az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts "Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools" --query "value[0].message" -o tsv
+
+# Configuring AD DS on onprem1 DC VM
+dcscript_file=dc-script.ps1
+cat <<EOF > $dcscript_file
+Install-ADDSForest -DomainName "$domain_name" -DomainNetbiosName "$domain_netbios" -SafeModeAdministratorPassword (ConvertTo-SecureString -AsPlainText "$admin_password" -Force) -InstallDNS -Force
+EOF
+
+echo -e "\e[1;36mConfiguring $domain_name domain on $onprem1_vnet_name-dc VM...\e[0m"
+az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts @$dcscript_file --query "value[0].message" -o tsv
+
+rm $dcscript_file
+
+# hub1 spoke1 vnet peering
+echo -e "\e[1;36mCreating $spoke1_vnet_name VNet peering...\e[0m"
+az network vnet peering create -g $rg --name $spoke1_vnet_name-to-$hub1_vnet_name --vnet-name $spoke1_vnet_name --remote-vnet $hub1_vnet_name --allow-vnet-access --allow-forwarded-traffic -o none
+az network vnet peering create -g $rg --name $hub1_vnet_name-to-$spoke1_vnet_name --vnet-name $hub1_vnet_name --remote-vnet $spoke1_vnet_name --allow-vnet-access --allow-forwarded-traffic -o none
+
+# hub1 spoke2 vnet peering
+echo -e "\e[1;36mCreating $spoke2_vnet_name VNet peering...\e[0m"
+az network vnet peering create -g $rg --name $spoke2_vnet_name-to-$hub1_vnet_name --vnet-name $spoke2_vnet_name --remote-vnet $hub1_vnet_name --allow-vnet-access --allow-forwarded-traffic -o none
+az network vnet peering create -g $rg --name $hub1_vnet_name-to-$spoke2_vnet_name --vnet-name $hub1_vnet_name --remote-vnet $spoke2_vnet_name --allow-vnet-access --allow-forwarded-traffic -o none
+
+# onprem1 vm
+echo -e "\e[1;36mDeploying $onprem1_vnet_name VM...\e[0m"
+az network nic create -g $rg -n $onprem1_vnet_name -l $location --vnet-name $onprem1_vnet_name --subnet $onprem1_vm_subnet_name -o none
+az vm create -g $rg -n $onprem1_vnet_name -l $location --image Ubuntu2404 --nics $onprem1_vnet_name --os-disk-name $onprem1_vnet_name --size $vm_size --admin-username $admin_username --generate-ssh-keys --no-wait
+onprem1_vm_ip=$(az network nic show -g $rg -n $onprem1_vnet_name --query ipConfigurations[0].privateIPAddress -o tsv | tr -d '\r') && echo $onprem1_vnet_name vm private ip: $onprem1_vm_ip
+
+# spoke1 vm
+echo -e "\e[1;36mDeploying $spoke1_vnet_name VM...\e[0m"
+az network nic create -g $rg -n $spoke1_vnet_name -l $location --vnet-name $spoke1_vnet_name --subnet $spoke1_vm_subnet_name -o none
+az vm create -g $rg -n $spoke1_vnet_name -l $location --image Ubuntu2404 --nics $spoke1_vnet_name --os-disk-name $spoke1_vnet_name --size $vm_size --admin-username $admin_username --generate-ssh-keys --no-wait
+spoke1_vm_ip=$(az network nic show -g $rg -n $spoke1_vnet_name --query ipConfigurations[0].privateIPAddress -o tsv | tr -d '\r') && echo $spoke1_vnet_name vm private ip: $spoke1_vm_ip
+
+# spoke2 vm
+echo -e "\e[1;36mDeploying $spoke2_vnet_name VM...\e[0m"
+az network nic create -g $rg -n $spoke2_vnet_name -l $location --vnet-name $spoke2_vnet_name --subnet $spoke2_vm_subnet_name -o none
+az vm create -g $rg -n $spoke2_vnet_name -l $location --image Ubuntu2404 --nics $spoke2_vnet_name --os-disk-name $spoke2_vnet_name --size $vm_size --admin-username $admin_username --generate-ssh-keys --no-wait
+spoke2_vm_ip=$(az network nic show -g $rg -n $spoke2_vnet_name --query ipConfigurations[0].privateIPAddress -o tsv | tr -d '\r') && echo $spoke2_vnet_name vm private ip: $spoke2_vm_ip
+
+# create storage account
+stor_name=wadstor$RANDOM
+echo -e "\e[1;36mCreating a storage account ($stor_name)...\e[0m"
+az storage account create -g $rg -n $stor_name --access-tier Hot --sku Standard_LRS -o none
+blobid=$(az storage account show -g $rg -n $stor_name --query id -o tsv | tr -d '\r')
+blob_endpoint=$(az storage account show -g $rg -n $stor_name --query primaryEndpoints.blob -o tsv | tr -d '\r' |sed -e 's|^https://||' |sed -e 's|/$||') && echo $stor_name blob endpoint: $blob_endpoint
+
+# Creating a private endpoint
+echo -e "\e[1;36mCreating a private endpoint for storage account($stor_name) in $spoke1_vnet_name...\e[0m"
+az network private-endpoint create -g $rg -n $stor_name-blobpe --connection-name connection --private-connection-resource-id $blobid --subnet $spoke1_vm_subnet_name --group-id blob --vnet-name $spoke1_vnet_name -o none
+echo -e "\e[1;36mCreating a private DNS zone for privatelink.blob.core.windows.net...\e[0m"
+az network private-dns zone create -g $rg -n privatelink.blob.core.windows.net -o none
+echo -e "\e[1;36mLink privatelink.blob.core.windows.net to $spoke1_vnet_name...\e[0m"
+az network private-dns link vnet create -g $rg -n $spoke1_vnet_name-dns-link --zone-name privatelink.blob.core.windows.net --virtual-network $spoke1_vnet_name --registration-enabled false -o none
+echo -e "\e[1;36mLink privatelink.blob.core.windows.net to $hub1_vnet_name...\e[0m"
+az network private-dns link vnet create -g $rg -n $hub1_vnet_name-dns-link --zone-name privatelink.blob.core.windows.net --virtual-network $hub1_vnet_name --registration-enabled false -o none
+echo -e "\e[1;36mCreate a DNS record for $stor_name in privatelink.blob.core.windows.net...\e[0m"
+az network private-endpoint dns-zone-group create -g $rg -n zone-group --endpoint-name $stor_name-blobpe --private-dns-zone privatelink.blob.core.windows.net --zone-name blob -o none
+
+# hub1 route table
+echo -e "\e[1;36mDeploying $hub1_vnet_name route table and attaching it to $hub1_vm_subnet_name subnet...\e[0m"
+az network route-table create -n $hub1_vnet_name -g $rg -l $location -o none
+az network route-table route create --address-prefix $onprem1_vnet_address -n to-$onprem1_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $hub1_vnet_name --next-hop-ip-address $hub1_gw_private_ip -o none
+az network route-table route create --address-prefix $spoke1_vnet_address -n to-$spoke1_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $hub1_vnet_name --next-hop-ip-address $hub1_gw_private_ip -o none
+az network route-table route create --address-prefix $spoke2_vnet_address -n to-$spoke2_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $hub1_vnet_name --next-hop-ip-address $hub1_gw_private_ip -o none
+az network vnet subnet update --vnet-name $hub1_vnet_name -n $hub1_vm_subnet_name --route-table $hub1_vnet_name -g $rg -o none
+
+# spoke1 route table
+echo -e "\e[1;36mDeploying $spoke1_vnet_name route table and attaching it to $spoke1_vm_subnet_name subnet...\e[0m"
+az network route-table create -n $spoke1_vnet_name -g $rg -l $location -o none
+az network route-table route create --address-prefix $onprem1_vnet_address -n to-$onprem1_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $spoke1_vnet_name --next-hop-ip-address $hub1_gw_private_ip -o none
+az network route-table route create --address-prefix $hub1_vnet_address -n to-$hub1_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $spoke1_vnet_name --next-hop-ip-address $hub1_gw_private_ip -o none
+az network route-table route create --address-prefix $spoke2_vnet_address -n to-$spoke2_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $spoke1_vnet_name --next-hop-ip-address $hub1_gw_private_ip -o none
+az network vnet subnet update --vnet-name $spoke1_vnet_name -n $spoke1_vm_subnet_name --route-table $spoke1_vnet_name -g $rg -o none
+
+# spoke2 route table
+echo -e "\e[1;36mDeploying $spoke2_vnet_name route table and attaching it to $spoke2_vm_subnet_name subnet...\e[0m"
+az network route-table create -n $spoke2_vnet_name -g $rg -l $location -o none
+az network route-table route create --address-prefix $onprem1_vnet_address -n to-$onprem1_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $spoke2_vnet_name --next-hop-ip-address $hub1_gw_private_ip -o none
+az network route-table route create --address-prefix $hub1_vnet_address -n to-$hub1_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $spoke2_vnet_name --next-hop-ip-address $hub1_gw_private_ip -o none
+az network route-table route create --address-prefix $spoke1_vnet_address -n to-$spoke1_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $spoke2_vnet_name --next-hop-ip-address $hub1_gw_private_ip -o none
+az network vnet subnet update --vnet-name $spoke2_vnet_name -n $spoke2_vm_subnet_name --route-table $spoke2_vnet_name -g $rg -o none
+
+# onprem1 route table
+echo -e "\e[1;36mDeploying $onprem1_vnet_name route table and attaching it to $onprem1_vm_subnet_name subnet...\e[0m"
+az network route-table create -n $onprem1_vnet_name -g $rg -l $location -o none
+az network route-table route create --address-prefix $hub1_vnet_address -n to-$hub1_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $onprem1_vnet_name --next-hop-ip-address $onprem1_gw_private_ip -o none
+az network route-table route create --address-prefix $spoke1_vnet_address -n to-$spoke1_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $onprem1_vnet_name --next-hop-ip-address $onprem1_gw_private_ip -o none
+az network route-table route create --address-prefix $spoke2_vnet_address -n to-$spoke2_vnet_name -g $rg --next-hop-type VirtualAppliance --route-table-name $onprem1_vnet_name --next-hop-ip-address $onprem1_gw_private_ip -o none
+az network vnet subnet update --vnet-name $onprem1_vnet_name -n $onprem1_vm_subnet_name --route-table $onprem1_vnet_name -g $rg -o none
+
+# clear up the cloudinit file
+rm $cloudinit_file
+
+#######################
+# hub1 VPN Config  #
+#######################
+echo -e "\e[1;36mCreating S2S/BGP VPN Config files for $hub1_vnet_name-gw gateway VM...\e[0m"
+# ipsec.secrets
+psk_file=~/ipsec.secrets
+cat <<EOF > $psk_file
+$hub1_gw_pubip $onprem1_gw_pubip : PSK $psk
+EOF
+
+# ipsec.conf
+ipsec_file=~/ipsec.conf
+cat <<EOF > $ipsec_file
+conn %default
+         # Authentication Method : Pre-Shared Key
+         leftauth=psk
+         rightauth=psk
+         ike=aes256-sha256-modp2048
+         ikelifetime=28800s
+         # Phase 1 Negotiation Mode : main
+         aggressive=no
+         esp=aes256-sha256
+         lifetime=3600s
+         keylife=3600s
+         type=tunnel
+         dpddelay=10s
+         dpdtimeout=30s
+         keyexchange=ikev2
+         rekey=yes
+         reauth=no
+         dpdaction=restart
+         closeaction=restart
+         leftsubnet=0.0.0.0/0,::/0
+         rightsubnet=0.0.0.0/0,::/0
+         leftupdown=/etc/strongswan.d/ipsec-vti.sh
+         installpolicy=yes
+         compress=no
+         mobike=no
+conn $onprem1_vnet_name-gw
+         # OnPrem Gateway Private IP Address :
+         left=$hub1_gw_private_ip
+         # OnPrem Gateway Public IP Address :
+         leftid=$hub1_gw_pubip
+         # Azure VPN Gateway Public IP address :
+         right=$onprem1_gw_pubip
+         rightid=$onprem1_gw_pubip
+         auto=add
+         # unique number per IPSEC Tunnel eg. 100, 101 etc
+         mark=101
+EOF
+
+
+# ipsec-vti.sh
+ipsec_vti_file=~/ipsec-vti.sh
+tee $ipsec_vti_file > /dev/null <<'EOT'
+#!/bin/bash
+#
+# /etc/strongswan.d/ipsec-vti.sh
+#
+
+IP=$(which ip)
+IPTABLES=$(which iptables)
+PLUTO_MARK_OUT_ARR=(${PLUTO_MARK_OUT//// })
+PLUTO_MARK_IN_ARR=(${PLUTO_MARK_IN//// })
+PLUTO_CONNECTION=$onprem1_vnet_name-gw
+VTI_INTERFACE=vti0
+VTI_LOCALADDR=$hub1_gw_vti0/32
+VTI_REMOTEADDR=$onprem1_gw_vti0/32
+echo "`date` - ${PLUTO_VERB} - ${PLUTO_CONNECTION} - $VTI_INTERFACE" >> /tmp/vtitrace.log
+case "${PLUTO_VERB}" in
+    up-client)
+        $IP link add ${VTI_INTERFACE} type vti local ${PLUTO_ME} remote ${PLUTO_PEER} okey ${PLUTO_MARK_OUT_ARR[0]} ikey ${PLUTO_MARK_IN_ARR[0]}
+        sysctl -w net.ipv4.conf.${VTI_INTERFACE}.disable_policy=1
+        sysctl -w net.ipv4.conf.${VTI_INTERFACE}.rp_filter=2 || sysctl -w net.ipv4.conf.${VTI_INTERFACE}.rp_filter=0
+        $IP addr add ${VTI_LOCALADDR} remote ${VTI_REMOTEADDR} dev ${VTI_INTERFACE}
+        $IP link set ${VTI_INTERFACE} up mtu 1350
+        $IPTABLES -t mangle -I FORWARD -o ${VTI_INTERFACE} -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+        $IPTABLES -t mangle -I INPUT -p esp -s ${PLUTO_PEER} -d ${PLUTO_ME} -j MARK --set-xmark ${PLUTO_MARK_IN}
+        $IP route flush table 220
+        /etc/init.d/frr force-reload bgpd
+        ;;
+    down-client)
+        $IP link del ${VTI_INTERFACE}
+        $IPTABLES -t mangle -D FORWARD -o ${VTI_INTERFACE} -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+        $IPTABLES -t mangle -D INPUT -p esp -s ${PLUTO_PEER} -d ${PLUTO_ME} -j MARK --set-xmark ${PLUTO_MARK_IN}
+        ;;
+esac
+
+# Enable IPv4 forwarding
+sysctl -w net.ipv4.ip_forward=1
+sysctl -w net.ipv4.conf.eth0.disable_xfrm=1
+sysctl -w net.ipv4.conf.eth0.disable_policy=1
+EOT
+
+sed -i "/\$onprem1_vnet_name-gw/ s//$onprem1_vnet_name-gw/" $ipsec_vti_file
+sed -i "/\$hub1_gw_vti0/ s//$hub1_gw_vti0/" $ipsec_vti_file
+sed -i "/\$onprem1_gw_vti0/ s//$onprem1_gw_vti0/" $ipsec_vti_file
+
+
+# frr.conf
+frr_conf_file=~/frr.conf
+cat <<EOF > $frr_conf_file
+frr version 10.3
+frr defaults traditional
+hostname $hub1_vnet_name-gw
+log syslog informational
+no ipv6 forwarding
+service integrated-vtysh-config
+!
+ip route $hub1_vnet_address $hub1_gw_nic_default_gw
+ip route $spoke1_vnet_address $hub1_gw_nic_default_gw
+ip route $spoke2_vnet_address $hub1_gw_nic_default_gw
+!
+router bgp $hub1_gw_asn
+ bgp router-id $hub1_gw_vti0
+ no bgp ebgp-requires-policy
+ neighbor $onprem1_gw_vti0 remote-as $onprem1_gw_asn
+ neighbor $onprem1_gw_vti0 description $onprem1_vnet_name-gw
+ neighbor $onprem1_gw_vti0 ebgp-multihop 2
+ !
+ address-family ipv4 unicast
+  network $hub1_vnet_address
+  network $spoke1_vnet_address
+  network $spoke2_vnet_address
+  neighbor $onprem1_gw_vti0 soft-reconfiguration inbound
+ exit-address-family
+exit
+!
+EOF
+
+##### copy files to onprem gw
+echo -e "\e[1;36mCopying and applying S2S/BGP VPN Config files to $hub1_vnet_name-gw gateway VM...\e[0m"
+scp -o StrictHostKeyChecking=no $psk_file $ipsec_file $ipsec_vti_file $frr_conf_file $hub1_gw_pubip:/home/$admin_username
+scp -o StrictHostKeyChecking=no ~/.ssh/id_rsa $hub1_gw_pubip:/home/$admin_username/.ssh/
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $hub1_gw_pubip "sudo mv /home/$admin_username/frr.conf /etc/frr/frr.conf"
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $hub1_gw_pubip "sudo mv /home/$admin_username/ipsec.* /etc/"
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $hub1_gw_pubip "sudo mv /home/$admin_username/ipsec-vti.sh /etc/strongswan.d/"
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $hub1_gw_pubip "sudo chmod +x /etc/strongswan.d/ipsec-vti.sh"
+
+# clean up config files
+rm $psk_file $ipsec_file $ipsec_vti_file $frr_conf_file
+
+#######################
+# onprem1 VPN Config  #
+#######################
+echo -e "\e[1;36mCreating S2S/BGP VPN Config files for $onprem1_vnet_name-gw gateway VM...\e[0m"
+# ipsec.secrets
+psk_file=~/ipsec.secrets
+cat <<EOF > $psk_file
+$onprem1_gw_pubip $hub1_gw_pubip : PSK $psk
+EOF
+
+# ipsec.conf
+ipsec_file=~/ipsec.conf
+cat <<EOF > $ipsec_file
+conn %default
+         # Authentication Method : Pre-Shared Key
+         leftauth=psk
+         rightauth=psk
+         ike=aes256-sha256-modp2048
+         ikelifetime=28800s
+         # Phase 1 Negotiation Mode : main
+         aggressive=no
+         esp=aes256-sha256
+         lifetime=3600s
+         keylife=3600s
+         type=tunnel
+         dpddelay=10s
+         dpdtimeout=30s
+         keyexchange=ikev2
+         rekey=yes
+         reauth=no
+         dpdaction=restart
+         closeaction=restart
+         leftsubnet=0.0.0.0/0,::/0
+         rightsubnet=0.0.0.0/0,::/0
+         leftupdown=/etc/strongswan.d/ipsec-vti.sh
+         installpolicy=yes
+         compress=no
+         mobike=no
+conn $hub1_vnet_name-gw
+         # OnPrem Gateway Private IP Address :
+         left=$onprem1_gw_private_ip
+         # OnPrem Gateway Public IP Address :
+         leftid=$onprem1_gw_pubip
+         # Azure VPN Gateway Public IP address :
+         right=$hub1_gw_pubip
+         rightid=$hub1_gw_pubip
+         auto=start
+         # unique number per IPSEC Tunnel eg. 100, 101 etc
+         mark=101
+EOF
+
+
+# ipsec-vti.sh
+ipsec_vti_file=~/ipsec-vti.sh
+tee $ipsec_vti_file > /dev/null <<'EOT'
+#!/bin/bash
+#
+# /etc/strongswan.d/ipsec-vti.sh
+#
+
+IP=$(which ip)
+IPTABLES=$(which iptables)
+PLUTO_MARK_OUT_ARR=(${PLUTO_MARK_OUT//// })
+PLUTO_MARK_IN_ARR=(${PLUTO_MARK_IN//// })
+PLUTO_CONNECTION=$hub1_vnet_name-gw
+VTI_INTERFACE=vti0
+VTI_LOCALADDR=$onprem1_gw_vti0/32
+VTI_REMOTEADDR=$hub1_gw_vti0/32
+echo "`date` - ${PLUTO_VERB} - ${PLUTO_CONNECTION} - $VTI_INTERFACE" >> /tmp/vtitrace.log
+case "${PLUTO_VERB}" in
+    up-client)
+        $IP link add ${VTI_INTERFACE} type vti local ${PLUTO_ME} remote ${PLUTO_PEER} okey ${PLUTO_MARK_OUT_ARR[0]} ikey ${PLUTO_MARK_IN_ARR[0]}
+        sysctl -w net.ipv4.conf.${VTI_INTERFACE}.disable_policy=1
+        sysctl -w net.ipv4.conf.${VTI_INTERFACE}.rp_filter=2 || sysctl -w net.ipv4.conf.${VTI_INTERFACE}.rp_filter=0
+        $IP addr add ${VTI_LOCALADDR} remote ${VTI_REMOTEADDR} dev ${VTI_INTERFACE}
+        $IP link set ${VTI_INTERFACE} up mtu 1350
+        $IPTABLES -t mangle -I FORWARD -o ${VTI_INTERFACE} -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+        $IPTABLES -t mangle -I INPUT -p esp -s ${PLUTO_PEER} -d ${PLUTO_ME} -j MARK --set-xmark ${PLUTO_MARK_IN}
+        $IP route flush table 220
+        /etc/init.d/frr force-reload bgpd
+        ;;
+    down-client)
+        $IP link del ${VTI_INTERFACE}
+        $IPTABLES -t mangle -D FORWARD -o ${VTI_INTERFACE} -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+        $IPTABLES -t mangle -D INPUT -p esp -s ${PLUTO_PEER} -d ${PLUTO_ME} -j MARK --set-xmark ${PLUTO_MARK_IN}
+        ;;
+esac
+
+# Enable IPv4 forwarding
+sysctl -w net.ipv4.ip_forward=1
+sysctl -w net.ipv4.conf.eth0.disable_xfrm=1
+sysctl -w net.ipv4.conf.eth0.disable_policy=1
+EOT
+
+sed -i "/\$hub1_vnet_name-gw/ s//$hub1_vnet_name-gw/" $ipsec_vti_file
+sed -i "/\$onprem1_gw_vti0/ s//$onprem1_gw_vti0/" $ipsec_vti_file
+sed -i "/\$hub1_gw_vti0/ s//$hub1_gw_vti0/" $ipsec_vti_file
+
+
+# frr.conf
+frr_conf_file=~/frr.conf
+cat <<EOF > $frr_conf_file
+frr version 10.3
+frr defaults traditional
+hostname $hub1_vnet_name-gw
+log syslog informational
+no ipv6 forwarding
+service integrated-vtysh-config
+!
+ip route $onprem1_vnet_address $onprem1_gw_nic_default_gw
+!
+router bgp $onprem1_gw_asn
+ bgp router-id $onprem1_gw_vti0
+ no bgp ebgp-requires-policy
+ neighbor $hub1_gw_vti0 remote-as $hub1_gw_asn
+ neighbor $hub1_gw_vti0 description $hub1_vnet_name-gw
+ neighbor $hub1_gw_vti0 ebgp-multihop 2
+ !
+ address-family ipv4 unicast
+  network $onprem1_vnet_address
+  neighbor $hub1_gw_vti0 soft-reconfiguration inbound
+ exit-address-family
+exit
+!
+EOF
+
+##### copy files to onprem gw
+echo -e "\e[1;36mCopying and applying S2S/BGP VPN Config files to $onprem1_vnet_name-gw gateway VM...\e[0m"
+scp -o StrictHostKeyChecking=no $psk_file $ipsec_file $ipsec_vti_file $frr_conf_file $onprem1_gw_pubip:/home/$admin_username
+scp -o StrictHostKeyChecking=no ~/.ssh/id_rsa $onprem1_gw_pubip:/home/$admin_username/.ssh/
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_gw_pubip "sudo mv /home/$admin_username/frr.conf /etc/frr/frr.conf"
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_gw_pubip "sudo mv /home/$admin_username/ipsec.* /etc/"
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_gw_pubip "sudo mv /home/$admin_username/ipsec-vti.sh /etc/strongswan.d/"
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_gw_pubip "sudo chmod +x /etc/strongswan.d/ipsec-vti.sh"
+
+# clean up config files
+rm $psk_file $ipsec_file $ipsec_vti_file $frr_conf_file
+
+#############
+# Diagnosis #
+#############
+echo -e "\e[1;36mRestarting IPSec on $hub1_vnet_name-gw and $onprem1_vnet_name-gw...\e[0m"
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $hub1_gw_pubip "sudo ipsec restart"
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_gw_pubip "sudo ipsec restart"
+
+echo -e "\e[1;36mChecking the IPsec VPN tunnel on $hub1_vnet_name-gw gateway vm...\e[0m"
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $hub1_gw_pubip "sudo ipsec status"
+
+echo -e "\e[1;36mChecking the IPsec VPN tunnel on $onprem1_vnet_name-gw gateway vm...\e[0m"
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_gw_pubip "sudo ipsec status"
+
+echo -e "\e[1;36mChecking BGP routing on $hub1_vnet_name-gw gateway vm...\e[0m"
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $hub1_gw_pubip "sudo vtysh -c 'show bgp summary' && sudo vtysh -c 'show bgp all'"
+
+echo -e "\e[1;36mChecking BGP routing on $onprem1_vnet_name-gw gateway vm...\e[0m"
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_gw_pubip "sudo vtysh -c 'show bgp summary' && sudo vtysh -c 'show bgp all'"
+
+# allow icmp on hub1-dns
+az vm run-command invoke -g $rg -n $hub1_vnet_name-dns --command-id RunPowerShellScript --scripts "Get-NetFirewallRule -DisplayName 'File and Printer Sharing (Echo Request - ICMPv4-In)' | Enable-NetFirewallRule" --query "value[0].message" -o tsv
+
+# check connectivity from hub1-dns to rest of network
+echo -e "\e[1;36mChecking connectivity from $hub1_vnet_name-dns VM to rest of the network...\e[0m"
+az vm run-command invoke -g $rg -n $hub1_vnet_name-dns --command-id RunPowerShellScript --scripts "ping -n 2 $hub1_gw_private_ip ; ping -n 2 $onprem1_dc_private_ip ; ping -n 2 $onprem1_gw_private_ip ; ping -n 2 $hub1_vm_ip ; ping -n 2  $onprem1_vm_ip ; ping -n 2 $spoke1_vm_ip ; ping -n 2 $spoke2_vm_ip" --query "value[0].message" -o tsv
+
+# check connectivity from onprem1-dc to rest of network
+echo -e "\e[1;36mChecking connectivity from $onprem1_vnet_name-dc VM to rest of the network...\e[0m"
+az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts "ping -n 2 $hub1_gw_private_ip ; ping -n 2 $hub1_dns_private_ip ; ping -n 2 $onprem1_gw_private_ip ; ping -n 2 $hub1_vm_ip ; ping -n 2  $onprem1_vm_ip ; ping -n 2 $spoke1_vm_ip ; ping -n 2 $spoke2_vm_ip" --query "value[0].message" -o tsv
+
+# check connectivity from onprem1-gw to rest of network
+echo -e "\e[1;36mTring to checking reachability from $onprem1_vnet_name-gw vm to $site2_vnet_name and $s2spoke_vnet_name...\e[0m"
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_gw_pubip "ping -c 2 $hub1_gw_private_ip && ping -c 2 $hub1_dns_private_ip && ping -c 2 $onprem1_dc_private_ip && ping -c 2 $hub1_vm_ip && ping -c 2  $onprem1_vm_ip && ping -c 2 $spoke1_vm_ip && ping -c 2 $spoke2_vm_ip"
+
+# check connectivity from hub1-gw to rest of network
+echo -e "\e[1;36mTring to checking reachability from $hub1_vnet_name-gw vm to $site2_vnet_name and $s2spoke_vnet_name...\e[0m"
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $hub1_gw_pubip "ping -c 2 $onprem1_gw_private_ip && ping -c 2 $hub1_dns_private_ip && ping -c 2 $onprem1_dc_private_ip && ping -c 2 $hub1_vm_ip && ping -c 2  $onprem1_vm_ip && ping -c 2 $spoke1_vm_ip && ping -c 2 $spoke2_vm_ip"
+
+# check connectivity from hub1-vm to rest of network
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $hub1_gw_pubip "ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $hub1_vm_ip 'ping -c 2 $onprem1_gw_private_ip && ping -c 2 $hub1_dns_private_ip && ping -c 2 $onprem1_dc_private_ip && ping -c 2 $hub1_gw_private_ip && ping -c 2  $onprem1_vm_ip && ping -c 2 $spoke1_vm_ip && ping -c 2 $spoke2_vm_ip'"
+
+# check connectivity from spoke1 vm to rest of network
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $hub1_gw_pubip "ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $spoke1_vm_ip 'ping -c 2 $onprem1_gw_private_ip && ping -c 2 $hub1_dns_private_ip && ping -c 2 $onprem1_dc_private_ip && ping -c 2 $hub1_gw_private_ip && ping -c 2  $onprem1_vm_ip && ping -c 2 $hub1_vm_ip && ping -c 2 $spoke2_vm_ip'"
+
+# check connectivity from spoke2 vm to rest of network
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $hub1_gw_pubip "ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $spoke2_vm_ip 'ping -c 2 $onprem1_gw_private_ip && ping -c 2 $hub1_dns_private_ip && ping -c 2 $onprem1_dc_private_ip && ping -c 2 $hub1_gw_private_ip && ping -c 2  $onprem1_vm_ip && ping -c 2 $hub1_vm_ip && ping -c 2 $spoke1_vm_ip'"
+
+# check connectivity from onprem1 vm to rest of network
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $hub1_gw_pubip "ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_vm_ip 'ping -c 2 $onprem1_gw_private_ip && ping -c 2 $hub1_dns_private_ip && ping -c 2 $onprem1_dc_private_ip && ping -c 2 $hub1_gw_private_ip && ping -c 2  $spoke2_vm_ip && ping -c 2 $hub1_vm_ip && ping -c 2 $spoke1_vm_ip'"
+
+# Update DNS on hub1 VNet
+echo -e "\e[1;36mUpdating $hub1_vnet_name VNet DNS to the IP address of $onprem1_vnet_name-dc: $onprem1_dc_private_ip...\e[0m"
+az network vnet update -g $rg -n $hub1_vnet_name --dns-servers $onprem1_dc_private_ip -o none
+echo -e "\e[1;36mRestarting $hub1_vnet_name VMs for the DNS to take effect...\e[0m"
+az vm restart -g $rg -n $hub1_vnet_name-dns --no-wait
+
+# wait for the hub1 dns vm to be restarted
+sleep 60
+
+# Join the hub1 dns server to domain
+echo -e "\e[1;36mJoin $hub1_vnet_name-dns VM to $domain_name...\e[0m"
+script=script.ps1
+cat <<EOF > $script
+Add-Computer -DomainName "$domain_name" -Credential (New-Object System.Management.Automation.PSCredential ("$domain_netbios\\$admin_username", (ConvertTo-SecureString "$admin_password" -AsPlainText -Force))) -Force
+EOF
+az vm run-command invoke -g $rg -n $hub1_vnet_name-dns --command-id RunPowerShellScript --scripts @script.ps1 --query "value[0].message" -o tsv
+rm $script
+# restart the hub1 dns vm to apply the domain join
+echo -e "\e[1;36mRestarting $hub1_vnet_name-dns VM...\e[0m"
+az vm restart -g $rg -n $hub1_vnet_name-dns --no-wait
+
+# wait for the hub1 dns vm to be restarted
+echo -e "\e[1;36mWaiting for $hub1_vnet_name-dns VM to be restarted...\e[0m"
+sleep 60
+
+# Promote hub1 DNS server as an additional domain controller
+echo -e "\e[1;36mInstall Domain Services on $hub1_vnet_name-dns...\e[0m"
+az vm run-command invoke -g $rg -n $hub1_vnet_name-dns --command-id RunPowerShellScript --scripts "Install-WindowsFeature AD-Domain-Services -IncludeManagementTools" --query "value[0].message" -o tsv
+
+echo -e "\e[1;36mPromoting $hub1_vnet_name-dns as an additional domain controller...\e[0m"
+dcscript_file=dc-script.ps1
+cat <<EOF > $dcscript_file
+Install-ADDSDomainController -DomainName "$domain_name" -Credential (New-Object System.Management.Automation.PSCredential ("$domain_netbios\\$admin_username", (ConvertTo-SecureString "$admin_password" -AsPlainText -Force))) -SafeModeAdministratorPassword (ConvertTo-SecureString "$admin_password" -AsPlainText -Force) -InstallDNS -Force
+EOF
+cat $dcscript_file
+
+az vm run-command invoke -g $rg -n $hub1_vnet_name-dns --command-id RunPowerShellScript --scripts @$dcscript_file --query "value[0].message" -o tsv
+
+rm $dcscript_file
+
+# Enable Condtional Forwarding on onprem1 DNS server VM
+echo -e "\e[1;36mEnable Conditional DNS forwarding for blob.core.windows.net on $onprem1_vnet_name-dc to $hub1_dns_private_ip - $hub1_vnet_name-dns VM...\e[0m"
+az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts "Add-DnsServerConditionalForwarderZone -Name "blob.core.windows.net" -MasterServers $hub1_dns_private_ip" --query "value[0].message" -o tsv
+
+# check the blob endpoint DNS resolution on onprem1 dc VM:
+echo -e "\e[1;36mChecking DNS resolution of $blob_endpoint on $onprem1_vnet_name-dc after configuring conditional DNS forwarding on $onprem1_vnet_name-dc VM to $hub1_vnet_name-dns VM...\e[0m"
+az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts "nslookup $blob_endpoint" --query "value[0].message" -o tsv
+
+# check the blob endpoint DNS resolution on onprem1 dc VM:
+echo -e "\e[1;36mChecking DNS resolution of $blob_endpoint on $hub1_vnet_name-dns...\e[0m"
+az vm run-command invoke -g $rg -n $hub1_vnet_name-dns --command-id RunPowerShellScript --scripts "nslookup $blob_endpoint" --query "value[0].message" -o tsv
+
+# check the blob endpoint DNS resolution on onprem1 gw VM:
+echo -e "\e[1;36mChecking DNS resolution of $blob_endpoint on $onprem1_vnet_name-gw...\e[0m"
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_gw_pubip "nslookup $blob_endpoint 10.2.1.4"
+
+# check the blob endpoint DNS resolution on hub1 gw VM:
+echo -e "\e[1;36mChecking DNS resolution of $blob_endpoint on $hub1_vnet_name-gw...\e[0m"
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $hub1_gw_pubip "nslookup $blob_endpoint 10.1.1.4"
+
+# check the blob endpoint DNS resolution on spoke1 VM:
+echo -e "\e[1;36mChecking DNS resolution of $blob_endpoint on $spoke1_vnet_name...\e[0m"
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $hub1_gw_pubip "ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $spoke1_vm_ip 'nslookup $blob_endpoint'"
+
+# check the blob endpoint DNS resolution on spoke2 VM:
+echo -e "\e[1;36mChecking DNS resolution of $blob_endpoint on $spoke2_vnet_name...\e[0m"
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $hub1_gw_pubip "ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $spoke2_vm_ip 'nslookup $blob_endpoint'"
+
+# Update DNS on hub1 VNet
+echo -e "\e[1;36mUpdating $spoke2_vnet_name VNet DNS to the IP address of $hub1_vnet_name-dns: $hub1_dns_private_ip...\e[0m"
+az network vnet update -g $rg -n $spoke2_vnet_name --dns-servers $hub1_dns_private_ip -o none
+echo -e "\e[1;36mRestarting $spoke2_vnet_name VMs for the DNS to take effect...\e[0m"
+az vm restart -g $rg -n $spoke2_vnet_name --no-wait
+
+sleep 60
+
+# check the blob endpoint DNS resolution on spoke2 VM:
+echo -e "\e[1;36mChecking DNS resolution of $blob_endpoint on $spoke2_vnet_name after updating the dns server setting on $spoke2_vnet_name to $hub1_dns_private_ip...\e[0m"
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $hub1_gw_pubip "ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $spoke2_vm_ip 'nslookup $blob_endpoint'"
+
+#cleanup
+# az group delete -g $rg -y --no-wait
