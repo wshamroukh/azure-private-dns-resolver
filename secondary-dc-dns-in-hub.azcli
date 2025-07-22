@@ -1,4 +1,4 @@
-rg=secondary-dns-in-hub
+rg=secondary-dc-dns-in-hub
 location=centralindia
 
 hub1_vnet_name=hub1
