@@ -80,6 +80,10 @@ echo -e "\e[1;36mCreating $hub1_vnet_name VNet...\e[0m"
 az network vnet create -g $rg -n $hub1_vnet_name -l $location --address-prefixes $hub1_vnet_address --subnet-name $hub1_vm_subnet_name --subnet-prefixes $hub1_vm_subnet_address -o none
 az network vnet subnet create -g $rg -n $hub1_gw_subnet_name --address-prefixes $hub1_gw_subnet_address --vnet-name $hub1_vnet_name -o none
 
+# Create hub1 bastion 
+echo -e "\e[1;36mDeploying Azure Bastion $hub1_vnet_name-bas...\e[0m"
+az network bastion create -g $rg -n $hub1_vnet_name-bas --vnet-name $hub1_vnet_name --sku Developer -o table
+
 # hub1 dns forwarder vm
 echo -e "\e[1;36mDeploying $hub1_vnet_name-fwd VM...\e[0m"
 az network nic create -g $rg -n $hub1_vnet_name-fwd -l $location --vnet-name $hub1_vnet_name --subnet $hub1_vm_subnet_name -o none
@@ -96,6 +100,10 @@ echo -e "\e[1;36mDeploying $onprem1_vnet_name-dc VM...\e[0m"
 az network nic create -g $rg -n $onprem1_vnet_name-dc -l $location --vnet-name $onprem1_vnet_name --subnet $onprem1_vm_subnet_name -o none
 az vm create -g $rg -n $onprem1_vnet_name-dc -l $location --image Win2022Datacenter --nics $onprem1_vnet_name-dc --os-disk-name $onprem1_vnet_name-dc --size Standard_B2ls_v2 --admin-username $admin_username --admin-password $admin_password --no-wait
 onprem1_dc_private_ip=$(az network nic show -g $rg -n $onprem1_vnet_name-dc --query ipConfigurations[0].privateIPAddress -o tsv | tr -d '\r') && echo $onprem1_vnet_name-dc vm private ip: $onprem1_dc_private_ip
+
+# Create onprem1-bastion 
+echo -e "\e[1;36mDeploying Azure Bastion $onprem1_vnet_name-bas...\e[0m"
+az network bastion create -g $rg -n $onprem1_vnet_name-bas --vnet-name $onprem1_vnet_name --sku Developer -o table
 
 # hub1 gw vm
 echo -e "\e[1;36mDeploying $hub1_vnet_name-gw VM...\e[0m"
@@ -122,6 +130,10 @@ echo -e "\e[1;36mInstalling AD Domain Services feature on $onprem1_vnet_name-dc 
 az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts "Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools" --query "value[0].message" -o tsv
 echo -e "\e[1;36mConfiguring $domain_name domain on $onprem1_vnet_name-dc VM...\e[0m"
 az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts @$dcscript_file --query "value[0].message" -o tsv
+
+# Installing DNS on hub1-fwd VM
+echo -e "\e[1;36mInstalling DNS Services feature on $hub1_vnet_name-fwd VM...\e[0m"
+az vm run-command invoke -g $rg -n $hub1_vnet_name-fwd --command-id RunPowerShellScript --scripts "Install-WindowsFeature -Name DNS -IncludeManagementTools" --query "value[0].message" -o tsv
 
 # clear up the cloudinit file
 rm $cloudinit_file $dcscript_file
@@ -313,7 +325,7 @@ sed -i "/\$onprem1_gw_vti0/ s//$onprem1_gw_vti0/" $ipsec_vti_file
 # frr.conf
 frr_conf_file=~/frr.conf
 cat <<EOF > $frr_conf_file
-frr version 10.4.0
+frr version 10.6.0
 frr defaults traditional
 hostname $hub1_vnet_name-gw
 log syslog informational
@@ -455,7 +467,7 @@ sed -i "/\$hub1_gw_vti0/ s//$hub1_gw_vti0/" $ipsec_vti_file
 # frr.conf
 frr_conf_file=~/frr.conf
 cat <<EOF > $frr_conf_file
-frr version 10.4.0
+frr version 10.6.0
 frr defaults traditional
 hostname $hub1_vnet_name-gw
 log syslog informational
@@ -504,9 +516,9 @@ ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_gw_pubip "sudo ipse
 echo -e "\e[1;36mChecking DNS resolution of $blob_endpoint before configuring DNS conditional forwarding on $onprem1_vnet_name-dc VM...\e[0m"
 az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts "nslookup $blob_endpoint" --query "value[0].message" -o tsv
 
-# Install DNS on hub1 DNS forwarder VM
-echo -e "\e[1;36mInstalling DNS Service on $hub1_vnet_name-fwd VM...\e[0m"
-az vm run-command invoke -g $rg -n $hub1_vnet_name-fwd --command-id RunPowerShellScript --scripts "Install-WindowsFeature -Name DNS -IncludeManagementTools -IncludeAllSubFeature" --query "value[0].message" -o tsv
+# # Install DNS on hub1 DNS forwarder VM
+# echo -e "\e[1;36mInstalling DNS Service on $hub1_vnet_name-fwd VM...\e[0m"
+# az vm run-command invoke -g $rg -n $hub1_vnet_name-fwd --command-id RunPowerShellScript --scripts "Install-WindowsFeature -Name DNS -IncludeManagementTools -IncludeAllSubFeature" --query "value[0].message" -o tsv
 
 # enable DNS forwarding on hub1 DNS forwarder
 echo -e "\e[1;36mEnabling DNS forwarding on $hub1_vnet_name-fwd VM to Azure DNS Server IP address 168.63.129.16...\e[0m"
@@ -523,6 +535,10 @@ az vm run-command invoke -g $rg -n $hub1_vnet_name-fwd --command-id RunPowerShel
 # check the blob endpoint DNS resolution on onprem dc VM:
 echo -e "\e[1;36mChecking DNS resolution of $blob_endpoint on $onprem_vnet_name-dc after configuring conditional DNS forwarding on $onprem1_vnet_name-dc VM to $hub1_vnet_name-fwd VM...\e[0m"
 az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts "nslookup $blob_endpoint" --query "value[0].message" -o tsv
+
+# check the blob endpoint DNS resolution spoke1 VM:
+echo -e "\e[1;36mChecking DNS resolution of $blob_endpoint on $spoke1_vnet_name VM which has $hub_vnet_name-fwd as the DNS server...\e[0m"
+az vm run-command invoke -g $rg -n $spoke1_vnet_name --command-id RunPowerShellScript --scripts "nslookup $blob_endpoint" --query "value[0].message" -o tsv
 
 # check the blob endpoint DNS resolution spoke2 VM:
 echo -e "\e[1;36mChecking DNS resolution of $blob_endpoint on $spoke2_vnet_name VM which has $hub_vnet_name-fwd as the DNS server...\e[0m"
