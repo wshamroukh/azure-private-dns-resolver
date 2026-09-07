@@ -295,8 +295,8 @@ rm $pshell_file
 
 # Update DNS Server on onprem1 VNet to DC IP
 echo -e "\e[1;36mUpdate DNS Server on $onprem1_vnet_name and $o1spoke_vnet_name VNets to DC IP ($onprem1_dc_ip)...\e[0m"
-az network vnet update -g $rg -n $onprem1_vnet_name --dns-servers $onprem1_dc_ip -o none
-az network vnet update -g $rg -n $o1spoke_vnet_name --dns-servers $onprem1_dc_ip -o none
+az network vnet update -g $rg -n $onprem1_vnet_name --dns-servers $onprem1_dc_ip "168.63.129.16" -o none
+az network vnet update -g $rg -n $o1spoke_vnet_name --dns-servers $onprem1_dc_ip "168.63.129.16" -o none
 echo -e "\e[1;36mRestarting onprem1 VMs after updating DNS settings in their VNet...\e[0m"
 az vm restart -g $rg -n $onprem1_vnet_name --force --no-wait
 az vm restart -g $rg -n $onprem1_vnet_name-gw --force --no-wait
@@ -597,8 +597,8 @@ echo -e "\e[1;36mChecking DNS Resolution from $onprem1_vnet_name-dc VM to blob e
 az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts "nslookup $blob_endpoint" --query "value[0].message" -o tsv
 
 # Checking DNS resolution of onpremise domain from hub1 vm
-echo -e "\e[1;36mChecking DNS Resolution from $hub1_vnet_name-gw VM to $domain_name domain...\e[0m"
-ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_gw_pubip "nslookup $onprem1_vnet_name-dc.$domain_name"
+echo -e "\e[1;36mChecking DNS Resolution from $h1spoke_vnet_name-win VM to $domain_name domain...\e[0m"
+az vm run-command invoke -g $rg -n $h1spoke_vnet_name-win --command-id RunPowerShellScript --scripts "nslookup $onprem1_vnet_name-dc.$domain_name" --query "value[0].message" -o tsv
 
 #cleanup
 # az group delete -g $rg -y --no-wait
