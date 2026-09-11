@@ -1,0 +1,417 @@
+rg=private-dns-resolver-s2s-opnsense
+location=centralindia
+
+fw_vm_image=$(az vm image list -l $location -p freebsd --sku 15_1-release-zfs --all --query "[?offer=='freebsd-15_1'].urn" -o tsv | tr -d '\r') && echo $fw_vm_image
+az vm image terms accept --urn $fw_vm_image -o none
+
+hub1_vnet_name=hub1
+hub1_vnet_address=10.1.0.0/16
+hub1_fw_subnet_name='fw'
+hub1_fw_subnet_address='10.1.0.0/24'
+hub1_vm_subnet_name=vm
+hub1_vm_subnet_address=10.1.1.0/24
+hub1_bastion_subnet_address=10.1.2.0/24
+hub1_in_subnet=inbound
+hub1_in_subnet_address=10.1.3.0/24
+hub1_out_subnet=outbound
+hub1_out_subnet_address=10.1.4.0/24
+
+h1spoke_vnet_name=h1spoke
+h1spoke_vnet_address=10.11.0.0/16
+h1spoke_vm_subnet_name=vm
+h1spoke_vm_subnet_address=10.11.0.0/24
+h1spoke_bastion_subnet_address=10.11.1.0/24
+
+onprem1_vnet_name=onprem1
+onprem1_vnet_address=10.2.0.0/16
+onprem1_fw_subnet_name=gw
+onprem1_fw_subnet_address=10.2.0.0/24
+onprem1_fw_asn=65502
+onprem1_fw_vti0=10.2.0.250
+onprem1_vm_subnet_name=vm
+onprem1_vm_subnet_address=10.2.1.0/24
+onprem1_bastion_subnet_address=10.2.2.0/24
+
+o1spoke_vnet_name=o1spoke
+o1spoke_vnet_address=10.12.0.0/16
+o1spoke_vm_subnet_name=vm
+o1spoke_vm_subnet_address=10.12.0.0/24
+o1spoke_bastion_subnet_address=10.12.1.0/24
+
+admin_username=$(whoami)
+admin_password=Test#123#123
+myip=$(curl -s4 https://ifconfig.co/)
+psk=secret12345
+vm_size=Standard_B2ats_v2
+win_vm_size=Standard_B2als_v2
+domain_name=contoso.local
+domain_netbios=CONTOSO
+
+opnsense_init_file=opnsense_init.sh
+cat <<EOF > $opnsense_init_file
+#!/usr/local/bin/bash
+fetch https://raw.githubusercontent.com/opnsense/update/master/src/bootstrap/opnsense-bootstrap.sh.in
+sed -i.bak 's/reboot/#reboot/' opnsense-bootstrap.sh.in
+sed -i.bak "s#pkg delete -fa#pkg query -e '%R != \"FreeBSD-base\"' '%n' | xargs -r pkg delete -fy#" opnsense-bootstrap.sh.in
+sudo chmod +x opnsense-bootstrap.sh.in
+sudo sh ~/opnsense-bootstrap.sh.in -y -r 26.7
+sudo cp ~/config.xml /usr/local/etc/config.xml
+sudo cp ~/config.xml /conf/config.xml
+sudo pkg install -y bash git py313-setuptools-63.1.0_3
+git -c http.sslVerify=false clone https://github.com/Azure/WALinuxAgent.git
+cd ~/WALinuxAgent/
+git checkout v2.15.0.1
+sudo python setup.py install --register-service --force
+waagent -register-service
+waagent start
+sudo pkg install -y os-frr
+sudo reboot
+EOF
+
+dcscript_file=dc-script.ps1
+cat <<EOF > $dcscript_file
+Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools
+Install-ADDSForest -DomainName "$domain_name" -DomainNetbiosName "$domain_netbios" -SafeModeAdministratorPassword (ConvertTo-SecureString -AsPlainText "$admin_password" -Force) -InstallDNS -Force
+EOF
+
+function wait_until_finished {
+     wait_interval=15
+     resource_id=$1
+     resource_name=$(echo $resource_id | cut -d/ -f 9)
+     echo -e "\e[1;35mWaiting for resource $resource_name to finish provisioning...\e[0m"
+     start_time=`date +%s`
+     state=$(az resource show --id $resource_id --query properties.provisioningState -o tsv | tr -d '\r')
+     until [[ "$state" == "Succeeded" ]] || [[ "$state" == "Failed" ]] || [[ -z "$state" ]]
+     do
+        sleep $wait_interval
+        state=$(az resource show --id $resource_id --query properties.provisioningState -o tsv | tr -d '\r')
+     done
+     if [[ -z "$state" ]]
+     then
+        echo -e "\e[1;31mSomething really bad happened...\e[0m"
+     else
+        run_time=$(expr `date +%s` - $start_time)
+        ((minutes=${run_time}/60))
+        ((seconds=${run_time}%60))
+        echo -e "\e[1;32mResource $resource_name provisioning state is $state, wait time $minutes minutes and $seconds seconds\e[0m"
+     fi
+}
+
+function first_ip(){
+    subnet=$1
+    IP=$(echo $subnet | cut -d/ -f 1)
+    IP_HEX=$(printf '%.2X%.2X%.2X%.2X\n' `echo $IP | sed -e 's/\./ /g'`)
+    NEXT_IP_HEX=$(printf %.8X `echo $(( 0x$IP_HEX + 1 ))`)
+    NEXT_IP=$(printf '%d.%d.%d.%d\n' `echo $NEXT_IP_HEX | sed -r 's/(..)/0x\1 /g'`)
+    echo "$NEXT_IP"
+}
+
+# Resource Groups
+echo -e "\e[1;36mCreating $rg Resource Group...\e[0m"
+az group create -l $location -n $rg -o none
+
+# hub1 vnet
+echo -e "\e[1;36mCreating $hub1_vnet_name VNet...\e[0m"
+az network vnet create -g $rg -n $hub1_vnet_name -l $location --address-prefixes $hub1_vnet_address --subnet-name $hub1_vm_subnet_name --subnet-prefixes $hub1_vm_subnet_address -o none
+az network vnet subnet create -g $rg -n $hub1_fw_subnet_name --address-prefixes $hub1_fw_subnet_address --vnet-name $hub1_vnet_name -o none
+az network vnet subnet create -g $rg -n AzureBastionSubnet --address-prefixes $hub1_bastion_subnet_address --vnet-name $hub1_vnet_name -o none
+az network vnet subnet create -g $rg -n $hub1_in_subnet --address-prefixes $hub1_in_subnet_address --vnet-name $hub1_vnet_name -o none
+az network vnet subnet create -g $rg -n $hub1_out_subnet --address-prefixes $hub1_out_subnet_address --vnet-name $hub1_vnet_name -o none
+hub1_vnetid=$(az network vnet show -g $rg -n $hub1_vnet_name --query id -o tsv | tr -d '\r')
+in_subnetid=$(az network vnet subnet show -g $rg -n $hub1_in_subnet --vnet-name $hub1_vnet_name --query id -o tsv | tr -d '\r')
+out_subnetid=$(az network vnet subnet show -g $rg -n $hub1_out_subnet --vnet-name $hub1_vnet_name --query id -o tsv | tr -d '\r')
+
+# hub1 Bastion host
+echo -e "\e[1;36mCreating Bastion host for $hub1_vnet_name VNet...\e[0m"
+az network bastion create -g $rg -n $hub1_vnet_name-bastion --vnet-name $hub1_vnet_name --sku Developer -l $location --no-wait
+
+# hub1 fw opnsense vm
+echo -e "\e[1;36mCreating $hub1_vnet_name-fw VM...\e[0m"
+az network public-ip create -g $rg -n "$hub1_vnet_name-fw" -l $location --allocation-method Static --sku Basic -o none
+az network nic create -g $rg -n "$hub1_vnet_name-fw-lan" --subnet $hub1_vm_subnet_name --vnet-name $hub1_vnet_name --ip-forwarding true --private-ip-address 10.1.1.250 -o none
+az network nic create -g $rg -n "$hub1_vnet_name-fw-wan" --subnet $hub1_fw_subnet_name --vnet-name $hub1_vnet_name --ip-forwarding true --private-ip-address 10.1.0.250 --public-ip-address "$hub1_vnet_name-fw" -o none
+az vm create -g $rg -n $hub1_vnet_name-fw --image $fw_vm_image --nics "$hub1_vnet_name-fw-wan" "$hub1_vnet_name-fw-lan" --os-disk-name $hub1_vnet_name-fw --size Standard_B4als_v2 --admin-username $admin_username --generate-ssh-keys --no-wait
+# hub1 fw opnsense vm details:
+hub1_fw_public_ip=$(az network public-ip show -g $rg -n "$hub1_vnet_name-fw" --query 'ipAddress' -o tsv | tr -d '\r') && echo $hub1_vnet_name-fw public ip: $hub1_fw_public_ip
+hub1_fw_wan_private_ip=$(az network nic show -g $rg -n $hub1_vnet_name-fw-wan --query ipConfigurations[].privateIPAddress -o tsv | tr -d '\r') && echo $hub1_vnet_name-fw wan private IP: $hub1_fw_wan_private_ip
+hub1_fw_lan_private_ip=$(az network nic show -g $rg -n $hub1_vnet_name-fw-lan --query ipConfigurations[].privateIPAddress -o tsv | tr -d '\r') && echo $hub1_vnet_name-fw lan private IP: $hub1_fw_lan_private_ip
+
+# onprem1 vnet
+echo -e "\e[1;36mCreating $onprem1_vnet_name VNet...\e[0m"
+az network vnet create -g $rg -n $onprem1_vnet_name -l $location --address-prefixes $onprem1_vnet_address --subnet-name $onprem1_vm_subnet_name --subnet-prefixes $onprem1_vm_subnet_address -o none
+az network vnet subnet create -g $rg -n $onprem1_fw_subnet_name --address-prefixes $onprem1_fw_subnet_address --vnet-name $onprem1_vnet_name -o none
+az network vnet subnet create -g $rg -n AzureBastionSubnet --address-prefixes $onprem1_bastion_subnet_address --vnet-name $onprem1_vnet_name -o none
+
+# onprem1 Bastion host
+echo -e "\e[1;36mCreating Bastion host for $onprem1_vnet_name VNet...\e[0m"
+az network bastion create -g $rg -n $onprem1_vnet_name-bastion --vnet-name $onprem1_vnet_name --sku Developer -l $location --no-wait
+
+# onprem1 dc
+echo -e "\e[1;36mDeploying $onprem1_vnet_name-dc VM...\e[0m"
+az network nic create -g $rg  -n $onprem1_vnet_name-dc -l $location --vnet-name $onprem1_vnet_name --subnet $onprem1_vm_subnet_name -o none
+az vm create -g $rg -n $onprem1_vnet_name-dc -l $location --image Win2022Datacenter --nics $onprem1_vnet_name-dc --os-disk-name $onprem1_vnet_name-dc --size $win_vm_size --admin-username $admin_username --admin-password $admin_password --no-wait -o none
+onprem1_dc_ip=$(az network nic show -g $rg -n $onprem1_vnet_name-dc --query ipConfigurations[0].privateIPAddress -o tsv | tr -d '\r') && echo $onprem1_vnet_name-dc private ip: $onprem1_dc_ip
+
+# onprem1 fw opnsense vm
+echo -e "\e[1;36mCreating $onprem1_vnet_name-fw VM...\e[0m"
+az network public-ip create -g $rg -n "$onprem1_vnet_name-fw" -l $location --allocation-method Static --sku Basic -o none
+az network nic create -g $rg -n "$onprem1_vnet_name-fw-lan" --subnet $onprem1_vm_subnet_name --vnet-name $onprem1_vnet_name --ip-forwarding true --private-ip-address 10.2.1.250 -o none
+az network nic create -g $rg -n "$onprem1_vnet_name-fw-wan" --subnet $onprem1_fw_subnet_name --vnet-name $onprem1_vnet_name --ip-forwarding true --private-ip-address 10.2.0.250 --public-ip-address "$onprem1_vnet_name-fw" -o none
+az vm create -g $rg -n $onprem1_vnet_name-fw --image $fw_vm_image --nics "$onprem1_vnet_name-fw-wan" "$onprem1_vnet_name-fw-lan" --os-disk-name $onprem1_vnet_name-fw --size Standard_B4als_v2 --admin-username $admin_username --generate-ssh-keys --no-wait
+# onprem1 fw opnsense vm details:
+onprem1_fw_public_ip=$(az network public-ip show -g $rg -n "$onprem1_vnet_name-fw" --query 'ipAddress' -o tsv | tr -d '\r') && echo $onprem1_vnet_name-fw public ip: $onprem1_fw_public_ip
+onprem1_fw_wan_private_ip=$(az network nic show -g $rg -n $onprem1_vnet_name-fw-wan --query ipConfigurations[].privateIPAddress -o tsv | tr -d '\r') && echo $onprem1_vnet_name-fw wan private IP: $onprem1_fw_wan_private_ip
+onprem1_fw_lan_private_ip=$(az network nic show -g $rg -n $onprem1_vnet_name-fw-lan --query ipConfigurations[].privateIPAddress -o tsv | tr -d '\r') && echo $onprem1_vnet_name-fw lan private IP: $onprem1_fw_lan_private_ip
+
+# h1spoke vnet
+echo -e "\e[1;36mCreating $h1spoke_vnet_name VNet...\e[0m"
+az network vnet create -g $rg -n $h1spoke_vnet_name -l $location --address-prefixes $h1spoke_vnet_address --subnet-name $h1spoke_vm_subnet_name --subnet-prefixes $h1spoke_vm_subnet_address -o none
+az network vnet subnet create -g $rg -n AzureBastionSubnet --address-prefixes $h1spoke_bastion_subnet_address --vnet-name $h1spoke_vnet_name -o none
+h1spoke_vnetid=$(az network vnet show -g $rg -n $h1spoke_vnet_name --query id -o tsv | tr -d '\r') && echo $h1spoke_vnet_name vnet id: $h1spoke_vnetid
+
+# h1spoke Bastion host
+echo -e "\e[1;36mCreating Bastion host for $h1spoke_vnet_name VNet...\e[0m"
+az network bastion create -g $rg -n $h1spoke_vnet_name-bastion --vnet-name $h1spoke_vnet_name --sku Developer -l $location --no-wait
+
+# o1spoke vnet
+echo -e "\e[1;36mCreating $o1spoke_vnet_name VNet...\e[0m"
+az network vnet create -g $rg -n $o1spoke_vnet_name -l $location --address-prefixes $o1spoke_vnet_address --subnet-name $o1spoke_vm_subnet_name --subnet-prefixes $o1spoke_vm_subnet_address -o none
+az network vnet subnet create -g $rg -n AzureBastionSubnet --address-prefixes $o1spoke_bastion_subnet_address --vnet-name $o1spoke_vnet_name -o none
+
+# o1spoke Bastion host
+echo -e "\e[1;36mCreating Bastion host for $o1spoke_vnet_name VNet...\e[0m"
+az network bastion create -g $rg -n $o1spoke_vnet_name-bastion --vnet-name $o1spoke_vnet_name --sku Developer -l $location --no-wait
+
+# Installing AD DS on onprem1 DC VM
+echo -e "\e[1;36mInstalling AD Domain Services on $onprem1_vnet_name-dc VM and configuring $domain_name domain...\e[0m"
+az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts @$dcscript_file --query "value[0].message" -o tsv
+
+# DNS Resolver
+dns_resolver_name=dnsresolver
+az extension add --name dns-resolver -o none
+echo -e "\e[1;36mCreating Azure Private DNS Resolver ($dns_resolver_name) in $hub1_vnet_name VNet...\e[0m"
+az dns-resolver create -g $rg -n $dns_resolver_name -l $location --id $hub1_vnetid -o none
+# inbound endpoint
+echo -e "\e[1;36mCreating an inbound endpoint for Azure Private DNS Resolver ($dns_resolver_name)...\e[0m"
+az dns-resolver inbound-endpoint create -g $rg -n inbound-endpoint --dns-resolver-name $dns_resolver_name --ip-configurations '[{"private-ip-address":"","private-ip-allocation-method":"Dynamic","id":"'$in_subnetid'"}]' -o none
+dns_resolver_ip=$(az dns-resolver inbound-endpoint show -g $rg -n inbound-endpoint --dns-resolver-name $dns_resolver_name --query ipConfigurations[0].privateIpAddress -o tsv | tr -d '\r')
+# outbound endpoint
+echo -e "\e[1;36mCreating an outbound endpoint for Azure Private DNS Resolver ($dns_resolver_name)...\e[0m"
+az dns-resolver outbound-endpoint create --dns-resolver-name $dns_resolver_name -g $rg -n outbound-endpoint --id $out_subnetid -o none
+outepid=$(az dns-resolver outbound-endpoint show -g $rg -n outbound-endpoint --dns-resolver-name $dns_resolver_name --query id -o tsv | tr -d '\r')
+# outbound ruleset to onprem
+echo -e "\e[1;36mCreating a rule set for $domain_name on Azure Private DNS Resolver ($dns_resolver_name)...\e[0m"
+az dns-resolver forwarding-ruleset create -g $rg -l $location --dns-forwarding-ruleset-name onprem-${domain_netbios}-ruleset --outbound-endpoints [{id:"$outepid"}] -o none
+# oubound dns rule
+echo -e "\e[1;36mCreating an outbound rule for $domain_name on Azure Private DNS Resolver ($dns_resolver_name)...\e[0m"
+az dns-resolver forwarding-rule create -g $rg -n ${domain_netbios}-rule --domain-name ${domain_name}. --forwarding-rule-state Enabled --ruleset-name onprem-${domain_netbios}-ruleset --target-dns-servers '[{ip-address:'$onprem1_dc_ip',port:'53'}]' -o none
+# hub dns resolver link with outbound ruleset
+echo -e "\e[1;36mCreating a vnet link between $domain_name ruleset and $hub1_vnet_name VNet...\e[0m"
+az dns-resolver vnet-link create -g $rg -n $hub1_vnet_name-link --ruleset-name onprem-${domain_netbios}-ruleset --id $hub1_vnetid -o none
+echo -e "\e[1;36mCreating a vnet link between $domain_name ruleset and $h1spoke_vnet_name VNet...\e[0m"
+az dns-resolver vnet-link create -g $rg -n $h1spoke_vnet_name-link --ruleset-name onprem-${domain_netbios}-ruleset --id $h1spoke_vnetid -o none
+
+# create storage account
+stor_name=wadstor$RANDOM
+echo -e "\e[1;36mCreating a storage account ($stor_name)...\e[0m"
+az storage account create -g $rg -n $stor_name --access-tier Hot --sku Standard_LRS -o none
+blobid=$(az storage account show -g $rg -n $stor_name --query id -o tsv | tr -d '\r')
+blob_endpoint=$(az storage account show -g $rg -n $stor_name --query primaryEndpoints.blob -o tsv | tr -d '\r' |sed -e 's|^https://||' |sed -e 's|/$||') && echo $stor_name blob endpoint: $blob_endpoint
+
+# Creating a private endpoint
+echo -e "\e[1;36mCreating a private endpoint for storage account($stor_name)...\e[0m"
+az network private-endpoint create -g $rg -n $stor_name-blobpe --connection-name connection --private-connection-resource-id $blobid --subnet $h1spoke_vm_subnet_name --group-id blob --vnet-name $h1spoke_vnet_name -o none
+echo -e "\e[1;36mCreating a private DNS zone for privatelink.blob.core.windows.net...\e[0m"
+az network private-dns zone create -g $rg -n privatelink.blob.core.windows.net -o none
+# Link the private DNS zone to the VNets
+echo -e "\e[1;36mLinking the private DNS zone for privatelink.blob.core.windows.net to $hub1_vnet_name and $h1spoke_vnet_name VNets...\e[0m"
+az network private-dns link vnet create -g $rg -n $hub1_vnet_name-dns-link --zone-name privatelink.blob.core.windows.net --virtual-network $hub1_vnet_name --registration-enabled false -o none
+az network private-dns link vnet create -g $rg -n $h1spoke_vnet_name-dns-link --zone-name privatelink.blob.core.windows.net --virtual-network $h1spoke_vnet_name --registration-enabled false -o none
+az network private-endpoint dns-zone-group create -g $rg -n zone-group --endpoint-name $stor_name-blobpe --private-dns-zone privatelink.blob.core.windows.net --zone-name blob -o none
+
+# Enable Conditional Forwarder on DC VM
+echo -e "\e[1;36mEnabling Conditional Forwarder on $onprem1_vnet_name DC VM...\e[0m"
+pshell_file=dns.ps1
+cat <<EOF > $pshell_file
+Add-DnsServerConditionalForwarderZone -Name "blob.core.windows.net" -MasterServers $dns_resolver_ip
+Set-DnsServerForwarder -IPAddress 1.1.1.1
+EOF
+# Run the script on DC VM
+az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts @dns.ps1 --query "value[0].message" -o tsv
+
+# clean up script file
+rm $dcscript_file $pshell_file
+
+# hub1 and h1spoke vnet peering
+echo -e "\e[1;36mCreating $h1spoke_vnet_name VNet peering...\e[0m"
+az network vnet peering create -g $rg --name $h1spoke_vnet_name-to-$hub1_vnet_name --vnet-name $h1spoke_vnet_name --remote-vnet $hub1_vnet_name --allow-vnet-access --allow-forwarded-traffic -o none
+az network vnet peering create -g $rg --name $hub1_vnet_name-to-$h1spoke_vnet_name --vnet-name $hub1_vnet_name --remote-vnet $h1spoke_vnet_name --allow-vnet-access --allow-forwarded-traffic -o none
+
+# onprem1 and o1spoke vnet peering
+echo -e "\e[1;36mCreating $o1spoke_vnet_name VNet peering...\e[0m"
+az network vnet peering create -g $rg --name $o1spoke_vnet_name-to-$onprem1_vnet_name --vnet-name $o1spoke_vnet_name --remote-vnet $onprem1_vnet_name --allow-vnet-access --allow-forwarded-traffic -o none
+az network vnet peering create -g $rg --name $onprem1_vnet_name-to-$o1spoke_vnet_name --vnet-name $onprem1_vnet_name --remote-vnet $o1spoke_vnet_name --allow-vnet-access --allow-forwarded-traffic -o none
+
+# hub1 vm
+echo -e "\e[1;36mDeploying $hub1_vnet_name VM...\e[0m"
+az network nic create -g $rg -n $hub1_vnet_name -l $location --vnet-name $hub1_vnet_name --subnet $hub1_vm_subnet_name -o none
+az vm create -g $rg -n $hub1_vnet_name -l $location --image Win2022Datacenter --nics $hub1_vnet_name --os-disk-name $hub1_vnet_name --size $win_vm_size --admin-username $admin_username --admin-password $admin_password --no-wait
+hub1_vm_ip=$(az network nic show -g $rg -n $hub1_vnet_name --query ipConfigurations[0].privateIPAddress -o tsv | tr -d '\r') && echo $hub1_vnet_name vm private ip: $hub1_vm_ip
+
+# hub1-lx vm
+echo -e "\e[1;36mDeploying $hub1_vnet_name-lx VM...\e[0m"
+az network nic create -g $rg -n $hub1_vnet_name-lx -l $location --vnet-name $hub1_vnet_name --subnet $hub1_vm_subnet_name -o none
+az vm create -g $rg -n $hub1_vnet_name-lx -l $location --image Ubuntu2204 --nics $hub1_vnet_name-lx --os-disk-name $hub1_vnet_name-lx --size $vm_size --admin-username $admin_username --admin-password $admin_password --no-wait
+hub1_lx_vm_ip=$(az network nic show -g $rg -n $hub1_vnet_name-lx --query ipConfigurations[0].privateIPAddress -o tsv | tr -d '\r') && echo $hub1_vnet_name-lx vm private ip: $hub1_lx_vm_ip
+
+# onprem1 vm
+echo -e "\e[1;36mDeploying $onprem1_vnet_name VM...\e[0m"
+az network nic create -g $rg -n $onprem1_vnet_name -l $location --vnet-name $onprem1_vnet_name --subnet $onprem1_vm_subnet_name -o none
+az vm create -g $rg -n $onprem1_vnet_name -l $location --image Win2022Datacenter --nics $onprem1_vnet_name --os-disk-name $onprem1_vnet_name --size $win_vm_size --admin-username $admin_username --admin-password $admin_password --no-wait
+onprem1_vm_ip=$(az network nic show -g $rg -n $onprem1_vnet_name --query ipConfigurations[0].privateIPAddress -o tsv | tr -d '\r') && echo $onprem1_vnet_name vm private ip: $onprem1_vm_ip
+
+# onprem1-lx vm
+echo -e "\e[1;36mDeploying $onprem1_vnet_name-lx VM...\e[0m"
+az network nic create -g $rg -n $onprem1_vnet_name-lx -l $location --vnet-name $onprem1_vnet_name --subnet $onprem1_vm_subnet_name -o none
+az vm create -g $rg -n $onprem1_vnet_name-lx -l $location --image Ubuntu2204 --nics $onprem1_vnet_name-lx --os-disk-name $onprem1_vnet_name-lx --size $vm_size --admin-username $admin_username --admin-password $admin_password --no-wait
+onprem1_lx_vm_ip=$(az network nic show -g $rg -n $onprem1_vnet_name-lx --query ipConfigurations[0].privateIPAddress -o tsv | tr -d '\r') && echo $onprem1_vnet_name-lx vm private ip: $onprem1_lx_vm_ip
+
+# h1spoke vm
+echo -e "\e[1;36mDeploying $h1spoke_vnet_name VM...\e[0m"
+az network nic create -g $rg -n $h1spoke_vnet_name -l $location --vnet-name $h1spoke_vnet_name --subnet $h1spoke_vm_subnet_name -o none
+az vm create -g $rg -n $h1spoke_vnet_name -l $location --image Win2022Datacenter --nics $h1spoke_vnet_name --os-disk-name $h1spoke_vnet_name --size $win_vm_size --admin-username $admin_username --admin-password $admin_password --no-wait
+h1spoke_vm_ip=$(az network nic show -g $rg -n $h1spoke_vnet_name --query ipConfigurations[0].privateIPAddress -o tsv | tr -d '\r') && echo $h1spoke_vnet_name vm private ip: $h1spoke_vm_ip
+
+# h1spoke-lx vm
+echo -e "\e[1;36mDeploying $h1spoke_vnet_name-lx VM...\e[0m"
+az network nic create -g $rg -n $h1spoke_vnet_name-lx -l $location --vnet-name $h1spoke_vnet_name --subnet $h1spoke_vm_subnet_name -o none
+az vm create -g $rg -n $h1spoke_vnet_name-lx -l $location --image Ubuntu2204 --nics $h1spoke_vnet_name-lx --os-disk-name $h1spoke_vnet_name-lx --size $vm_size --admin-username $admin_username --admin-password $admin_password --no-wait
+h1spoke_lx_vm_ip=$(az network nic show -g $rg -n $h1spoke_vnet_name-lx --query ipConfigurations[0].privateIPAddress -o tsv | tr -d '\r') && echo $h1spoke_vnet_name-lx vm private ip: $h1spoke_lx_vm_ip
+
+# o1spoke vm
+echo -e "\e[1;36mDeploying $o1spoke_vnet_name VM...\e[0m"
+az network nic create -g $rg -n $o1spoke_vnet_name -l $location --vnet-name $o1spoke_vnet_name --subnet $o1spoke_vm_subnet_name -o none
+az vm create -g $rg -n $o1spoke_vnet_name -l $location --image Win2022Datacenter --nics $o1spoke_vnet_name --os-disk-name $o1spoke_vnet_name --size $win_vm_size --admin-username $admin_username --admin-password $admin_password --no-wait
+o1spoke_vm_ip=$(az network nic show -g $rg -n $o1spoke_vnet_name --query ipConfigurations[0].privateIPAddress -o tsv | tr -d '\r') && echo $o1spoke_vnet_name vm private ip: $o1spoke_vm_ip
+
+# o1spoke-lx vm
+echo -e "\e[1;36mDeploying $o1spoke_vnet_name-lx VM...\e[0m"
+az network nic create -g $rg -n $o1spoke_vnet_name-lx -l $location --vnet-name $o1spoke_vnet_name --subnet $o1spoke_vm_subnet_name -o none
+az vm create -g $rg -n $o1spoke_vnet_name-lx -l $location --image Ubuntu2204 --nics $o1spoke_vnet_name-lx --os-disk-name $o1spoke_vnet_name-lx --size $vm_size --admin-username $admin_username --admin-password $admin_password --no-wait
+o1spoke_lx_vm_ip=$(az network nic show -g $rg -n $o1spoke_vnet_name-lx --query ipConfigurations[0].privateIPAddress -o tsv | tr -d '\r') && echo $o1spoke_vnet_name-lx vm private ip: $o1spoke_lx_vm_ip
+
+az vm run-command invoke --command-id RunPowerShellScript --name $hub1_vnet_name --resource-group $rg \
+ --scripts 'Get-NetFirewallRule -DisplayName "File and Printer Sharing (Echo Request - ICMPv4-In)" | Enable-NetFirewallRule; Get-NetFirewallRule -DisplayName "File and Printer Sharing (Echo Request - ICMPv6-In)" | Enable-NetFirewallRule; Get-NetFirewallRule -DisplayName "Virtual Machine Monitoring (Echo Request - ICMPv4-In)" | Enable-NetFirewallRule; Get-NetFirewallRule -DisplayName "Virtual Machine Monitoring (Echo Request - ICMPv6-In)" | Enable-NetFirewallRule' --no-wait
+
+az vm run-command invoke --command-id RunPowerShellScript --name $o1spoke_vnet_name --resource-group $rg \
+ --scripts 'Get-NetFirewallRule -DisplayName "File and Printer Sharing (Echo Request - ICMPv4-In)" | Enable-NetFirewallRule; Get-NetFirewallRule -DisplayName "File and Printer Sharing (Echo Request - ICMPv6-In)" | Enable-NetFirewallRule; Get-NetFirewallRule -DisplayName "Virtual Machine Monitoring (Echo Request - ICMPv4-In)" | Enable-NetFirewallRule; Get-NetFirewallRule -DisplayName "Virtual Machine Monitoring (Echo Request - ICMPv6-In)" | Enable-NetFirewallRule' --no-wait
+
+az vm run-command invoke --command-id RunPowerShellScript --name $onprem1_vnet_name --resource-group $rg \
+ --scripts 'Get-NetFirewallRule -DisplayName "File and Printer Sharing (Echo Request - ICMPv4-In)" | Enable-NetFirewallRule; Get-NetFirewallRule -DisplayName "File and Printer Sharing (Echo Request - ICMPv6-In)" | Enable-NetFirewallRule; Get-NetFirewallRule -DisplayName "Virtual Machine Monitoring (Echo Request - ICMPv4-In)" | Enable-NetFirewallRule; Get-NetFirewallRule -DisplayName "Virtual Machine Monitoring (Echo Request - ICMPv6-In)" | Enable-NetFirewallRule' --no-wait
+
+az vm run-command invoke --command-id RunPowerShellScript --name $o1spoke_vnet_name --resource-group $rg \
+ --scripts 'Get-NetFirewallRule -DisplayName "File and Printer Sharing (Echo Request - ICMPv4-In)" | Enable-NetFirewallRule; Get-NetFirewallRule -DisplayName "File and Printer Sharing (Echo Request - ICMPv6-In)" | Enable-NetFirewallRule; Get-NetFirewallRule -DisplayName "Virtual Machine Monitoring (Echo Request - ICMPv4-In)" | Enable-NetFirewallRule; Get-NetFirewallRule -DisplayName "Virtual Machine Monitoring (Echo Request - ICMPv6-In)" | Enable-NetFirewallRule' --no-wait
+
+
+# hub1 vm subnet route table
+echo -e "\e[1;36mDeploying $hub1_vnet_name route table and attaching it to $hub1_vm_subnet_name subnet...\e[0m"
+az network route-table create -n $hub1_vnet_name -g $rg -l $location -o none
+az network route-table route create --address-prefix 0.0.0.0/0 -n default -g $rg --next-hop-type VirtualAppliance --route-table-name $hub1_vnet_name --next-hop-ip-address $hub1_fw_lan_private_ip -o none
+az network vnet subnet update --vnet-name $hub1_vnet_name -n $hub1_vm_subnet_name --route-table $hub1_vnet_name -g $rg -o none
+
+# hub1 inbound subnet route table
+echo -e "\e[1;36mDeploying $hub1_vnet_name-in-snet-rt route table and attaching it to $hub1_in_subnet subnet...\e[0m"
+az network route-table create -n $hub1_vnet_name-in-snet-rt -g $rg -l $location -o none
+az network route-table route create --address-prefix 0.0.0.0/0 -n default -g $rg --next-hop-type VirtualAppliance --route-table-name $hub1_vnet_name-in-snet-rt --next-hop-ip-address $hub1_fw_lan_private_ip -o none
+az network vnet subnet update --vnet-name $hub1_vnet_name -n $hub1_in_subnet --route-table $hub1_vnet_name-in-snet-rt -g $rg -o none
+
+# hub1 outbound subnet route table
+echo -e "\e[1;36mDeploying $hub1_vnet_name-out-snet-rt route table and attaching it to $hub1_vm_subnet_name subnet...\e[0m"
+az network route-table create -n $hub1_vnet_name-out-snet-rt -g $rg -l $location -o none
+az network route-table route create --address-prefix 0.0.0.0/0 -n default -g $rg --next-hop-type VirtualAppliance --route-table-name $hub1_vnet_name-out-snet-rt --next-hop-ip-address $hub1_fw_lan_private_ip -o none
+az network vnet subnet update --vnet-name $hub1_vnet_name -n $hub1_out_subnet --route-table $hub1_vnet_name-out-snet-rt -g $rg -o none
+
+# h1spoke route table
+echo -e "\e[1;36mDeploying $h1spoke_vnet_name route table and attaching it to $h1spoke_vm_subnet_name subnet...\e[0m"
+az network route-table create -n $h1spoke_vnet_name -g $rg -l $location -o none
+az network route-table route create --address-prefix 0.0.0.0/0 -n default -g $rg --next-hop-type VirtualAppliance --route-table-name $h1spoke_vnet_name --next-hop-ip-address $hub1_fw_lan_private_ip -o none
+az network vnet subnet update --vnet-name $h1spoke_vnet_name -n $h1spoke_vm_subnet_name --route-table $h1spoke_vnet_name -g $rg -o none
+
+# onprem1 route table
+echo -e "\e[1;36mDeploying $onprem1_vnet_name route table and attaching it to $onprem1_vm_subnet_name subnet...\e[0m"
+az network route-table create -n $onprem1_vnet_name -g $rg -l $location -o none
+az network route-table route create --address-prefix 0.0.0.0/0 -n default -g $rg --next-hop-type VirtualAppliance --route-table-name $onprem1_vnet_name --next-hop-ip-address $onprem1_fw_lan_private_ip -o none
+az network vnet subnet update --vnet-name $onprem1_vnet_name -n $onprem1_vm_subnet_name --route-table $onprem1_vnet_name -g $rg -o none
+
+# o1spoke route table
+echo -e "\e[1;36mDeploying $o1spoke_vnet_name route table and attaching it to $o1spoke_vm_subnet_name subnet...\e[0m"
+az network route-table create -n $o1spoke_vnet_name -g $rg -l $location -o none
+az network route-table route create --address-prefix 0.0.0.0/0 -n default -g $rg --next-hop-type VirtualAppliance --route-table-name $o1spoke_vnet_name --next-hop-ip-address $onprem1_fw_lan_private_ip -o none
+az network vnet subnet update --vnet-name $o1spoke_vnet_name -n $o1spoke_vm_subnet_name --route-table $o1spoke_vnet_name -g $rg -o none
+
+# Update DNS Server on onprem1 VNet to DC IP
+echo -e "\e[1;36mUpdate DNS Server on $onprem1_vnet_name and $o1spoke_vnet_name VNets to DC IP ($onprem1_dc_ip)...\e[0m"
+az network vnet update -g $rg -n $onprem1_vnet_name --dns-servers $onprem1_dc_ip "168.63.129.16" -o none
+az network vnet update -g $rg -n $o1spoke_vnet_name --dns-servers $onprem1_dc_ip "168.63.129.16" -o none
+echo -e "\e[1;36mRestarting onprem1 VMs after updating DNS settings in their VNet...\e[0m"
+az vm restart -g $rg -n $onprem1_vnet_name --force --no-wait
+az vm restart -g $rg -n $o1spoke_vnet_name --force --no-wait
+
+# Download config files
+hub1_config=~/hub1_vti_bgp_config.xml
+curl -o $hub1_config https://raw.githubusercontent.com/wshamroukh/azure-private-dns-resolver/refs/heads/main/site1.xml
+sed -i -e "s/74\.225\.170\.223/${hub1_fw_public_ip}/g" -e "s/4\.188\.226\.123/${onprem1_fw_public_ip}/g" $hub1_config
+onprem1_config=~/onprem1_vti_bgp_config.xml
+curl -o $onprem1_config https://raw.githubusercontent.com/wshamroukh/azure-private-dns-resolver/refs/heads/main/site2.xml
+sed -i -e "s/74\.225\.170\.223/${hub1_fw_public_ip}/g" -e "s/4\.188\.226\.123/${onprem1_fw_public_ip}/g" $onprem1_config
+
+site1_fw_id=$(az vm show -g $rg -n $hub1_vnet_name-fw --query id -o tsv)
+wait_until_finished $site1_fw_id
+
+# hub1 opnsense bootstrap
+echo -e "\e[1;36mCopying configuration files to $hub1_vnet_name-fw and installing opnsense firewall...\e[0m"
+mv $hub1_config ~/config.xml
+scp -o StrictHostKeyChecking=no $opnsense_init_file ~/config.xml $admin_username@$hub1_fw_public_ip:/home/$admin_username
+ssh -o StrictHostKeyChecking=no $admin_username@$hub1_fw_public_ip "chmod +x /home/$admin_username/opnsense_init.sh && sh /home/$admin_username/opnsense_init.sh"
+rm ~/config.xml
+
+# onprem1 opnsense bootstrap
+echo -e "\e[1;36mCopying configuration files to $onprem1_vnet_name-fw and installing opnsense firewall...\e[0m"
+mv $onprem1_config ~/config.xml
+scp -o StrictHostKeyChecking=no $opnsense_init_file ~/config.xml $admin_username@$onprem1_fw_public_ip:/home/$admin_username
+ssh -o StrictHostKeyChecking=no $admin_username@$onprem1_fw_public_ip "chmod +x /home/$admin_username/opnsense_init.sh && sh /home/$admin_username/opnsense_init.sh"
+rm ~/config.xml $opnsense_init_file
+
+ssh-keygen -R $hub1_fw_public_ip
+ssh-keygen -R $onprem1_fw_public_ip
+
+
+#############
+# Diagnosis #
+#############
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $hub1_fw_public_ip "sudo systemctl restart ipsec && sudo systemctl enable ipsec"
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_fw_pubip "sudo systemctl restart ipsec && sudo systemctl enable ipsec"
+
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $hub1_fw_public_ip "sudo ipsec status && sudo ipsec statusall && sudo vtysh -c 'show ip bgp summary' && sudo vtysh -c 'show ip route bgp'"
+ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $onprem1_fw_pubip "sudo ipsec status && sudo ipsec statusall && sudo vtysh -c 'show ip bgp summary' && sudo vtysh -c 'show ip route bgp'"
+
+# Checking storage account dns resolution from onprem-dc VM
+echo -e "\e[1;36mChecking DNS Resolution from $onprem1_vnet_name-dc VM to blob endpoint: $blob_endpoint...\e[0m"
+az vm run-command invoke -g $rg -n $onprem1_vnet_name-dc --command-id RunPowerShellScript --scripts "nslookup $blob_endpoint" --query "value[0].message" -o tsv
+
+echo -e "\e[1;36mChecking DNS Resolution from $onprem1_vnet_name VM to blob endpoint: $blob_endpoint...\e[0m"
+az vm run-command invoke -g $rg -n $onprem1_vnet_name --command-id RunPowerShellScript --scripts "nslookup $blob_endpoint" --query "value[0].message" -o tsv
+
+echo -e "\e[1;36mChecking DNS Resolution from $o1spoke_vnet_name VM to blob endpoint: $blob_endpoint...\e[0m"
+az vm run-command invoke -g $rg -n $o1spoke_vnet_name --command-id RunPowerShellScript --scripts "nslookup $blob_endpoint" --query "value[0].message" -o tsv
+
+# Checking DNS resolution of onpremise domain from hub1 vm
+echo -e "\e[1;36mChecking DNS Resolution from $hub1_vnet_name VM to $domain_name domain...\e[0m"
+az vm run-command invoke -g $rg -n $hub1_vnet_name --command-id RunPowerShellScript --scripts "nslookup $onprem1_vnet_name-dc.$domain_name; nslookup $blob_endpoint" --query "value[0].message" -o tsv
+
+# Checking DNS resolution of onpremise domain from h1spoke vm
+echo -e "\e[1;36mChecking DNS Resolution from $h1spoke_vnet_name VM to $domain_name domain...\e[0m"
+az vm run-command invoke -g $rg -n $h1spoke_vnet_name --command-id RunPowerShellScript --scripts "nslookup $onprem1_vnet_name-dc.$domain_name; nslookup $blob_endpoint" --query "value[0].message" -o tsv
+
+#cleanup
+# az group delete -g $rg -y --no-wait
