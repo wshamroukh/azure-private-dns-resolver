@@ -1163,7 +1163,7 @@
             <nonat>0</nonat>
             <nosync>0</nosync>
             <sequence>100</sequence>
-            <interface>lan</interface>
+            <interface>wan</interface>
             <ipprotocol>inet</ipprotocol>
             <protocol>any</protocol>
             <source_net>any</source_net>
